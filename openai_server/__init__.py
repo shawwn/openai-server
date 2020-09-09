@@ -101,7 +101,8 @@ class GPTEngine:
     with self.session.as_default() as sess, self.graph.as_default() as graph:
       tokens = self.encode(prompt)
       if len(tokens) > self.hparams.n_ctx - max_tokens - 1:
-        tokens = tokens[0:self.hparams.n_ctx - max_tokens - 1]
+        #tokens = tokens[0:self.hparams.n_ctx - max_tokens - 1]
+        tokens = tokens[max_tokens+1:]
       length = max_tokens
       result = self.session.run(self.output, {
         self.context: [tokens],
