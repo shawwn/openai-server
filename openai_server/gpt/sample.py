@@ -3,10 +3,20 @@ import tensorflow as tf
 import model
 
 
-def penalize_used(logits, output, frequency_penalty=0.85):
+def lerp(a, b, t):
+    return (b - a) * t + a
 
+
+def penalize_used(logits, output, frequency_penalty=0.85):
+    penalty = tf.reduce_min(tf.one_hot(output, logits.shape[1], frequency_penalty, 1.0), axis=1)
+    minimum_logit = tf.reduce_min(logits, axis=1)
+    change_tensor = minimum_logit * tf.ones_like(logits, dtype=logits.dtype)
+    result = lerp(change_tensor, logits, penalty)
+    return result
+
+
+def penalize_used_old(logits, output, frequency_penalty=0.85):
     # I want to change the indices of logits wherever the index is found in output
-    change_tensor = tf.zeros_like(logits, dtype=logits.dtype)
     unique = tf.unique(output[0])[0]
     ones = tf.ones_like(unique, dtype=unique.dtype)
     indices = tf.expand_dims(unique, 1)
@@ -15,7 +25,8 @@ def penalize_used(logits, output, frequency_penalty=0.85):
 
     bool_tensor = tf.expand_dims(tf.cast(updates, tf.bool), 0)
 
-    return tf.compat.v1.where(bool_tensor, logits * frequency_penalty, logits)
+    result = tf.compat.v1.where(bool_tensor, logits * frequency_penalty, logits)
+    return result
 
 
 def top_k_logits(logits, k):

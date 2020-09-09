@@ -37,7 +37,8 @@ class GPTEngine:
     self.encoder = GPT2TokenizerFast.from_pretrained("gpt2")
     self.hparams = model.default_hparams()
     with open(os.path.join(self.api.model_path, model_name, 'hparams.json')) as f:
-      self.hparams.override_from_dict(json_load(f))
+      params = json_load(f)
+      self.hparams.override_from_dict(params)
     with self.session.as_default() as sess, self.graph.as_default() as graph:
       pp(self.session.list_devices())
       if 'CUDA_VISIBLE_DEVICES' in os.environ:
@@ -81,7 +82,7 @@ class GPTEngine:
     return result.ids
 
 
-  def completion(self, prompt, n=None, max_tokens=None, logprobs=None, stream=False, temperature=None, top_p=None, top_k=None, echo=None, frequency_penalty=None, best_of=None, **kws):
+  def completion(self, prompt, n=None, max_tokens=None, logprobs=None, stream=False, temperature=None, top_p=None, top_k=None, echo=None, frequency_penalty=None, best_of=None, stop=None, **kws):
     if temperature is None:
       temperature = 0.9
     if top_p is None:
@@ -94,10 +95,16 @@ class GPTEngine:
       max_tokens = 32
     if n is None:
       n = 1
+    if n >= 4:
+      n = 4 # cap to 4 choices
     if echo is None:
       echo = False
-    if frequency_penalty is None:
-      frequency_penalty = 0.0
+    if frequency_penalty is None or frequency_penalty <= 0.0:
+      frequency_penalty = 1.0
+    if stop is not None:
+      if isinstance(stop, str):
+        stop = [stop]
+      print('Stop: {!r}'.format(stop))
     if len(kws) > 0:
       print('Got extra keywords: {!r}'.format(kws))
     prompt = self.fix(prompt)
@@ -107,22 +114,31 @@ class GPTEngine:
         offset = self.hparams.n_ctx - (self.hparams.n_ctx - max_tokens - 1)
         tokens = tokens[offset:]
       length = max_tokens
-      result = self.session.run(self.output, {
-        self.context: [tokens],
-        self.temperature: temperature,
-        self.top_p: top_p,
-        self.top_k: top_k,
-        self.frequency_penalty: frequency_penalty,
-        self.length: length,
-      })
-      result_tokens = result[0]
-      if not echo:
-        result_tokens = result_tokens[len(tokens):]
-        #assert text.startswith(prompt)
-        #text = text[len(prompt):]
-      text = self.encoder.decode(result_tokens)
-      print(repr(text))
-      yield text
+      for i in range(n):
+        params = {
+          self.temperature: temperature,
+          self.top_p: top_p,
+          self.top_k: top_k,
+          self.frequency_penalty: frequency_penalty,
+          self.length: length,
+        }
+        print(params)
+        result = self.session.run(self.output, {self.context: [tokens], **params})
+        result_tokens = result[0]
+        completion = result_tokens[len(tokens):]
+        completion_text = self.encoder.decode(completion)
+        finish_reason = 'length'
+        if stop is not None:
+          for s in stop:
+            if s in completion_text:
+              completion_text = completion_text.split(s, 1)[0]
+              finish_reason = 'stop'
+        if echo:
+          text = prompt + completion_text
+        else:
+          text = completion_text
+        print(repr(text))
+        yield {'index': i, 'logprobs': None, 'text': text, 'finish-reason': finish_reason}
 
 class API:
   def __init__(self, model_path=None):
@@ -246,8 +262,8 @@ async def v1_engines_davinci_completions(request, engine_name):
   pp(kws)
   engine = api.engines[engine_name]
   choices = []
-  for index, text in enumerate(engine.completion(**kws)):
-    choices.append({'text': text, 'index': index, 'logprobs': None, 'finish-reason': 'length'})
+  for choice in engine.completion(**kws):
+    choices.append(choice)
   id_ = random_id("cmpl")
   return json({"id": id_, "object": "text_completion", "created": time.time(), "model": engine.id, "choices": choices})
   #return json({"id": "cmpl-Wt5z1RZglyDHHl0SnSvKWVzA", "object": "text_completion", "created": 1599616871, "model": "davinci:2020-05-03", "choices": [{"text": "Test.SetLayerPropertiesWithNonContainedInvisible (", "index": 0, "logprobs": None, "finish_reason": "length"}]})
