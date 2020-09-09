@@ -78,7 +78,7 @@ def sample_sequence(*, hparams, length, start_token=None, batch_size=None, conte
         def body(past, prev, output):
             next_outputs = step(hparams, prev, past=past)
             logits = next_outputs['logits'][:, -1, :]  / tf.to_float(temperature)
-            if frequency_penalty > 0.0:
+            if frequency_penalty != 0.0:
                 logits = penalize_used(logits, output, frequency_penalty=frequency_penalty)
             logits = top_k_logits(logits, k=top_k)
             logits = top_p_logits(logits, p=top_p)
