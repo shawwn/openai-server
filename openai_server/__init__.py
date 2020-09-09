@@ -105,8 +105,6 @@ class GPTEngine:
       tokens = self.encode(prompt)
       if len(tokens) + max_tokens >= self.hparams.n_ctx:
         offset = self.hparams.n_ctx - (self.hparams.n_ctx - max_tokens - 1)
-        offset = self.hparams.n_ctx - offset
-        #tokens = tokens[0:self.hparams.n_ctx - max_tokens - 1]
         tokens = tokens[offset:]
       length = max_tokens
       result = self.session.run(self.output, {
