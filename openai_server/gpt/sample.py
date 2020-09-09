@@ -16,7 +16,8 @@ def penalize_used_expensive(logits, output, frequency_penalty=0.85):
     return result
 
 
-def penalize_used(logits, output, frequency_penalty=0.85):
+# Doesn't seem quite right
+def penalize_used_new(logits, output, frequency_penalty=0.85):
     # I want to change the indices of logits wherever the index is found in output
     minimum_logit = tf.reduce_min(logits, axis=1)
     unique = tf.unique(output[0])[0]
@@ -31,7 +32,8 @@ def penalize_used(logits, output, frequency_penalty=0.85):
     return result
 
 
-def penalize_used_old(logits, output, frequency_penalty=0.85):
+# Only works for 1558M
+def penalize_used(logits, output, frequency_penalty=0.85):
     # I want to change the indices of logits wherever the index is found in output
     unique = tf.unique(output[0])[0]
     ones = tf.ones_like(unique, dtype=unique.dtype)
