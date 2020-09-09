@@ -49,7 +49,7 @@ class GPTEngine:
       self.saver = tf.train.Saver(var_list=tf.trainable_variables())
       self.saver.restore(sess, self.ckpt)
 
-  def completion(self, prompt, n=None, max_tokens=None, logprobs=None, stream=False, temperature=None, top_p=None, top_k=None, echo=None):
+  def completion(self, prompt, n=None, max_tokens=None, logprobs=None, stream=False, temperature=None, top_p=None, top_k=None, echo=None, frequency_penalty=None, **kws):
     if temperature is None:
       temperature = 0.9
     if top_p is None:
@@ -61,7 +61,11 @@ class GPTEngine:
     if n is None:
       n = 1
     if echo is None:
-      echo = True
+      echo = False
+    if frequency_penalty is None:
+      frequency_penalty = 0
+    if len(kws) > 0:
+      print('Got extra keywords: {!r}'.format(kws))
     with self.session.as_default() as sess, self.graph.as_default() as graph:
       tokens = self.encoder.encode(prompt)
       length = len(tokens) + max_tokens

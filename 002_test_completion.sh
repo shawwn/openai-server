@@ -14,4 +14,4 @@ shift 1
 export OPENAI_API_KEY="${OPENAI_API_KEY:-stub}"
 export OPENAI_API_BASE="${OPENAI_API_BASE:-http://localhost:8000}"
 export OPENAI_LOG="${OPENAI_LOG:-debug}"
-exec openai api completions.create -e "${engine}" -p "${prompt}" -M "${max_tokens}" -t "${temp}" -n "${n}" "$@"
+exec openai api completions.create -e "${engine}" -p "${prompt}" -t "${temp}" -M "${max_tokens}" -n "${n}" "$@"
