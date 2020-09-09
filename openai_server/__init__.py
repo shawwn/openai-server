@@ -15,6 +15,10 @@ from pprint import pprint as pp
 from openai_server.gpt import sample, model, encoder
 
 import tensorflow as tf
+import ftfy
+
+from tokenizers import Tokenizer
+from transformers import GPT2TokenizerFast
 
 
 class GPTEngine:
@@ -26,7 +30,8 @@ class GPTEngine:
       raise ValueError("Couldn't load checkpoint for {model_name} from {path}".format(model_name=model_name, path=os.path.join(api.model_path, model_name)))
     self.graph = tf.Graph()
     self.session = tf.Session(graph=self.graph)
-    self.encoder = encoder.get_encoder(model_name, self.api.model_path)
+    #self.encoder = encoder.get_encoder(model_name, self.api.model_path)
+    self.encoder = GPT2TokenizerFast.from_pretrained("gpt2")
     self.hparams = model.default_hparams()
     with open(os.path.join(self.api.model_path, model_name, 'hparams.json')) as f:
       self.hparams.override_from_dict(json_load(f))
@@ -49,7 +54,23 @@ class GPTEngine:
       self.saver = tf.train.Saver(var_list=tf.trainable_variables())
       self.saver.restore(sess, self.ckpt)
 
-  def completion(self, prompt, n=None, max_tokens=None, logprobs=None, stream=False, temperature=None, top_p=None, top_k=None, echo=None, frequency_penalty=None, **kws):
+
+  def fix(self, text):
+    fixed = ftfy.fix_text(text)
+    return fixed
+
+
+  # GPT2Tokenizer and Tokenizer has different ways of fetching token ids
+  def encode(self, text, encoder=None):
+    if encoder is None:
+      encoder = self.encoder
+    result = encoder.encode(text)
+    if isinstance(result, list):
+        return result
+    return result.ids
+
+
+  def completion(self, prompt, n=None, max_tokens=None, logprobs=None, stream=False, temperature=None, top_p=None, top_k=None, echo=None, frequency_penalty=None, best_of=None, **kws):
     if temperature is None:
       temperature = 0.9
     if top_p is None:
@@ -58,6 +79,8 @@ class GPTEngine:
       top_k = 0
     if max_tokens is None:
       max_tokens = 16
+    if max_tokens > 32:
+      max_tokens = 32
     if n is None:
       n = 1
     if echo is None:
@@ -66,9 +89,12 @@ class GPTEngine:
       frequency_penalty = 0
     if len(kws) > 0:
       print('Got extra keywords: {!r}'.format(kws))
+    prompt = self.fix(prompt)
     with self.session.as_default() as sess, self.graph.as_default() as graph:
-      tokens = self.encoder.encode(prompt)
-      length = len(tokens) + max_tokens
+      tokens = self.encode(prompt)
+      if len(tokens) > self.hparams.n_ctx - max_tokens - 1:
+        tokens = tokens[0:self.hparams.n_ctx - max_tokens - 1]
+      length = max_tokens
       result = self.session.run(self.output, {
         self.context: [tokens],
         self.temperature: temperature,
