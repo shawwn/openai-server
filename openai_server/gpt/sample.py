@@ -7,11 +7,27 @@ def lerp(a, b, t):
     return (b - a) * t + a
 
 
-def penalize_used(logits, output, frequency_penalty=0.85):
+# OOMs for 1.5B
+def penalize_used_expensive(logits, output, frequency_penalty=0.85):
     penalty = tf.reduce_min(tf.one_hot(output, logits.shape[1], frequency_penalty, 1.0), axis=1)
     minimum_logit = tf.reduce_min(logits, axis=1)
     change_tensor = minimum_logit * tf.ones_like(logits, dtype=logits.dtype)
     result = lerp(change_tensor, logits, penalty)
+    return result
+
+
+def penalize_used(logits, output, frequency_penalty=0.85):
+    # I want to change the indices of logits wherever the index is found in output
+    minimum_logit = tf.reduce_min(logits, axis=1)
+    unique = tf.unique(output[0])[0]
+    ones = tf.ones_like(unique, dtype=unique.dtype)
+    indices = tf.expand_dims(unique, 1)
+
+    updates = tf.scatter_nd(indices, ones, [logits.shape[1]])
+
+    bool_tensor = tf.expand_dims(tf.cast(updates, tf.bool), 0)
+
+    result = tf.compat.v1.where(bool_tensor, lerp(minimum_logit, logits, frequency_penalty), logits)
     return result
 
 
