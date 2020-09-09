@@ -54,8 +54,8 @@ class GPTEngine:
             batch_size=self.batch_size,
             temperature=self.temperature, top_k=self.top_k, top_p=self.top_p
         )
-        self.saver = tf.train.Saver(var_list=tf.trainable_variables())
-        self.saver.restore(sess, self.ckpt)
+      self.saver = tf.train.Saver(var_list=tf.trainable_variables())
+      self.saver.restore(sess, self.ckpt)
 
 
   def fix(self, text):
