@@ -10,7 +10,8 @@ app = Sanic()
 def log_request(request):
   #import pdb; pdb.set_trace()
   headers = dict(list(request.headers.items()))
-  del headers['authorization']
+  if 'authorization' in headers:
+    del headers['authorization']
   headers['x-openai-client-user-agent'] = loads(headers.get('x-openai-client-user-agent', '{}'))
   props = {}
   props['url'] = request.url
