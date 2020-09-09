@@ -115,10 +115,12 @@ class GPTEngine:
         self.frequency_penalty: frequency_penalty,
         self.length: length,
       })
-      text = self.encoder.decode(result[0])
+      result_tokens = result[0]
       if not echo:
-        assert text.startswith(prompt)
-        text = text[len(prompt):]
+        result_tokens = result_tokens[len(tokens):]
+        #assert text.startswith(prompt)
+        #text = text[len(prompt):]
+      text = self.encoder.decode(result_tokens)
       print(repr(text))
       yield text
 
