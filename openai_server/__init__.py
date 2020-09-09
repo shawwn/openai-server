@@ -36,23 +36,26 @@ class GPTEngine:
     with open(os.path.join(self.api.model_path, model_name, 'hparams.json')) as f:
       self.hparams.override_from_dict(json_load(f))
     with self.session.as_default() as sess, self.graph.as_default() as graph:
-      self.batch_size = batch_size
-      self.context = tf.placeholder(tf.int32, [self.batch_size, None], name="context")
-      self.length = tf.placeholder(tf.int32, (), name="length")
-      self.temperature = tf.placeholder(tf.float32, (), name="temperature")
-      self.top_k = tf.placeholder(tf.int32, (), name="top_k")
-      self.top_p = tf.placeholder(tf.float32, (), name="top_p")
-      #np.random.seed(seed)
-      #tf.set_random_seed(seed)
-      self.output = sample.sample_sequence(
-          hparams=self.hparams, length=self.length,
-          context=self.context,
-          batch_size=self.batch_size,
-          temperature=self.temperature, top_k=self.top_k, top_p=self.top_p
-      )
-      
-      self.saver = tf.train.Saver(var_list=tf.trainable_variables())
-      self.saver.restore(sess, self.ckpt)
+      pp(self.session.list_devices())
+      if 'CUDA_VISIBLE_DEVICES' in os.environ:
+        print('Using /gpu:0 on device {}'.format(os.environ['CUDA_VISIBLE_DEVICES']))
+      with tf.device('/gpu:0' if 'CUDA_VISIBLE_DEVICES' in os.environ else None):
+        self.batch_size = batch_size
+        self.context = tf.placeholder(tf.int32, [self.batch_size, None], name="context")
+        self.length = tf.placeholder(tf.int32, (), name="length")
+        self.temperature = tf.placeholder(tf.float32, (), name="temperature")
+        self.top_k = tf.placeholder(tf.int32, (), name="top_k")
+        self.top_p = tf.placeholder(tf.float32, (), name="top_p")
+        #np.random.seed(seed)
+        #tf.set_random_seed(seed)
+        self.output = sample.sample_sequence(
+            hparams=self.hparams, length=self.length,
+            context=self.context,
+            batch_size=self.batch_size,
+            temperature=self.temperature, top_k=self.top_k, top_p=self.top_p
+        )
+        self.saver = tf.train.Saver(var_list=tf.trainable_variables())
+        self.saver.restore(sess, self.ckpt)
 
 
   def fix(self, text):
