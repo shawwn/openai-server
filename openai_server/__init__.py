@@ -46,13 +46,18 @@ class GPTEngine:
         self.temperature = tf.placeholder(tf.float32, (), name="temperature")
         self.top_k = tf.placeholder(tf.int32, (), name="top_k")
         self.top_p = tf.placeholder(tf.float32, (), name="top_p")
+        self.frequency_penalty = tf.placeholder(tf.float32, (), name="frequency_penalty")
         #np.random.seed(seed)
         #tf.set_random_seed(seed)
         self.output = sample.sample_sequence(
-            hparams=self.hparams, length=self.length,
+            hparams=self.hparams,
+            length=self.length,
             context=self.context,
             batch_size=self.batch_size,
-            temperature=self.temperature, top_k=self.top_k, top_p=self.top_p
+            temperature=self.temperature,
+            top_k=self.top_k,
+            top_p=self.top_p,
+            frequency_penalty=self.frequency_penalty,
         )
       self.saver = tf.train.Saver(var_list=tf.trainable_variables())
       self.saver.restore(sess, self.ckpt)
@@ -89,7 +94,7 @@ class GPTEngine:
     if echo is None:
       echo = False
     if frequency_penalty is None:
-      frequency_penalty = 0
+      frequency_penalty = 0.0
     if len(kws) > 0:
       print('Got extra keywords: {!r}'.format(kws))
     prompt = self.fix(prompt)
@@ -103,6 +108,7 @@ class GPTEngine:
         self.temperature: temperature,
         self.top_p: top_p,
         self.top_k: top_k,
+        self.frequency_penalty: frequency_penalty,
         self.length: length,
       })
       text = self.encoder.decode(result[0])
