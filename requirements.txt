@@ -1,0 +1,5 @@
+sanic
+sanic-cors
+tokenizers
+transformers
+regex

@@ -8,8 +8,11 @@ import secrets
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gpt'))
 from json import loads
 from json import load as json_load
+
 from sanic import Sanic
 from sanic.response import json, text
+from sanic_cors import CORS, cross_origin
+
 from pprint import pprint as pp
 
 from openai_server.gpt import sample, model, encoder
@@ -100,9 +103,11 @@ class GPTEngine:
     prompt = self.fix(prompt)
     with self.session.as_default() as sess, self.graph.as_default() as graph:
       tokens = self.encode(prompt)
-      if len(tokens) > self.hparams.n_ctx - max_tokens - 1:
+      if len(tokens) + max_tokens >= self.hparams.n_ctx:
+        offset = self.hparams.n_ctx - (self.hparams.n_ctx - max_tokens - 1)
+        offset = self.hparams.n_ctx - offset
         #tokens = tokens[0:self.hparams.n_ctx - max_tokens - 1]
-        tokens = tokens[max_tokens+1:]
+        tokens = tokens[offset:]
       length = max_tokens
       result = self.session.run(self.output, {
         self.context: [tokens],
@@ -149,6 +154,8 @@ class API:
 api = API()
 
 app = Sanic()
+CORS(app)
+
 
 def log_request(request):
   #import pdb; pdb.set_trace()
