@@ -66,10 +66,11 @@ class GPTEngine:
         )
       var_list = tf.trainable_variables()
       self.saver = tf.train.Saver(var_list=var_list)
-      self.saver.restore(sess, self.ckpt)
       for v in var_list:
         print(self.ckpt, v)
       pp(self.hparams)
+      print('Restoring from {!r}'.format(self.ckpt))
+      self.saver.restore(sess, self.ckpt)
 
 
   def fix(self, text):
