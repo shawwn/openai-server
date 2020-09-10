@@ -63,8 +63,11 @@ class GPTEngine:
             top_p=self.top_p,
             frequency_penalty=self.frequency_penalty,
         )
-      self.saver = tf.train.Saver(var_list=tf.trainable_variables())
+      var_list = tf.trainable_variables()
+      self.saver = tf.train.Saver(var_list=var_list)
       self.saver.restore(sess, self.ckpt)
+      for v in var_list:
+        print(self.ckpt, v)
 
 
   def fix(self, text):
