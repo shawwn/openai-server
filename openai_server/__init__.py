@@ -147,7 +147,11 @@ class API:
     self.model_path = model_path
     self.models = []
     self.engines = {}
-    for model in tqdm.tqdm(os.listdir(self.model_path)):
+    if 'MODELS' in os.environ:
+      models = os.environ['MODELS'].split(',')
+    else:
+      models = os.listdir(self.model_path)
+    for model in tqdm.tqdm(models):
       try:
         engine = GPTEngine(api=self, model_name=model)
         self.engines[model] = engine
