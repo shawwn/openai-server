@@ -265,8 +265,8 @@ def random_id(prefix, nbytes=18):
   return prefix + '-' + base64.urlsafe_b64encode(token).decode('utf8')
 
 
-@app.route('/v1/engines/<engine_name>/completions', methods=['POST'])
-async def v1_engines_davinci_completions(request, engine_name):
+@app.route('/v1/engines/<engine_name>/completions', methods=['POST', 'GET'])
+async def v1_engines_completions(request, engine_name):
   log_request(request)
   kws = request.json
   pp(kws)
