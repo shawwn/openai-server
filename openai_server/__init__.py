@@ -6,7 +6,7 @@ import time
 import base64
 import secrets
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gpt'))
-from json import loads
+from json import loads, dumps
 from json import load as json_load
 
 from sanic import Sanic
@@ -277,6 +277,10 @@ def number(x):
   return x
 
 
+def json_pretty_dumps(x):
+   return dumps(x, sort_keys=True, indent=2)
+
+
 from urllib import parse
 
 @app.route('/v1/engines/<engine_name>/completions', methods=['POST', 'GET'])
@@ -293,7 +297,7 @@ async def v1_engines_completions(request, engine_name):
   for choice in engine.completion(**kws):
     choices.append(choice)
   id_ = random_id("cmpl")
-  return json({"id": id_, "object": "text_completion", "created": time.time(), "model": engine.id, "choices": choices})
+  return json({"id": id_, "object": "text_completion", "created": time.time(), "model": engine.id, "choices": choices}, dumps=json_pretty_dumps)
   #return json({"id": "cmpl-Wt5z1RZglyDHHl0SnSvKWVzA", "object": "text_completion", "created": 1599616871, "model": "davinci:2020-05-03", "choices": [{"text": "Test.SetLayerPropertiesWithNonContainedInvisible (", "index": 0, "logprobs": None, "finish_reason": "length"}]})
     
 if __name__ == '__main__':
