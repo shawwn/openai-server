@@ -68,6 +68,7 @@ class GPTEngine:
       self.saver.restore(sess, self.ckpt)
       for v in var_list:
         print(self.ckpt, v)
+      pp(self.hparams)
 
 
   def fix(self, text):
