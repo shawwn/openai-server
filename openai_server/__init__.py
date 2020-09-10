@@ -97,12 +97,12 @@ class GPTEngine:
       top_k = 0
     if max_tokens is None:
       max_tokens = 16
-    if max_tokens > 32:
-      max_tokens = 32
+    if max_tokens > int(os.environ.get('MAX_TOKENS', '500')):
+      max_tokens = int(os.environ.get('MAX_TOKENS', '500'))
     if n is None:
       n = 1
-    if n >= 4:
-      n = 4 # cap to 4 choices
+    if n >= int(os.environ.get('MAX_N', '4')):
+      n = int(os.environ.get('MAX_N', '4')) # cap to 4 choices
     if echo is None:
       echo = False
     if frequency_penalty is None or frequency_penalty <= 0.0:
