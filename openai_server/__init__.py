@@ -265,6 +265,18 @@ def random_id(prefix, nbytes=18):
   return prefix + '-' + base64.urlsafe_b64encode(token).decode('utf8')
 
 
+def number(x):
+  if isinstance(x, str):
+    try:
+      x = int(x)
+    except ValueError:
+      try:
+        x = float(x)
+      except ValueError:
+        pass
+  return x
+
+
 from urllib import parse
 
 @app.route('/v1/engines/<engine_name>/completions', methods=['POST', 'GET'])
@@ -274,6 +286,7 @@ async def v1_engines_completions(request, engine_name):
   if kws is None:
     url, query = request.url.split('?', 1) if '?' in request.url else (request.url, '')
     kws = dict(parse.parse_qsl(query))
+    kws = {k: number(v) for k, v in kws.items()}
   pp(kws)
   engine = api.engines[engine_name]
   choices = []
