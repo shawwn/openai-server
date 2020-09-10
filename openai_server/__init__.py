@@ -32,7 +32,8 @@ class GPTEngine:
     if self.ckpt is None:
       raise ValueError("Couldn't load checkpoint for {model_name} from {path}".format(model_name=model_name, path=os.path.join(api.model_path, model_name)))
     self.graph = tf.Graph()
-    self.session = tf.Session(graph=self.graph)
+    self.config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
+    self.session = tf.Session(graph=self.graph, config=self.config)
     #self.encoder = encoder.get_encoder(model_name, self.api.model_path)
     self.encoder = GPT2TokenizerFast.from_pretrained("gpt2")
     self.hparams = model.default_hparams()
