@@ -29,7 +29,7 @@ pip3 install -r requirements.txt
 python3 download_model.py 117M # or 345M, 774M, 1558M
 
 # start the server.
-MODELS=117M bash prod.sh
+bash prod.sh
 
 # in a new terminal, ask for a completion.
 bash 002_test_completion.sh 'Hello there. My name is'
