@@ -1,13 +1,21 @@
 # openai-server
 
-`openai-server` is an implementation of the OpenAI API.
+`openai-server` is an implementation of the [OpenAI API](https://openai.com/blog/openai-api/).
 
-This codebase implements `/v1/engines/list` and `/v1/engines/{model_name}/completions` endpoints.
+Specifically, we implement `/v1/engines/list` and `/v1/engines/{model_name}/completions` endpoints.
 
-The completions endpoint is mostly feature-complete vs the official OpenAI API endpoint. The JSON response is identical.
+Both endpoints are mostly feature-complete, with a few differences. The JSON response is identical; any library that works with the OpenAI API will probably work with this.
 
+To get started, see the [quickstart](#Quickstart) or the [examples](#Examples).
 
-## quickstart
+## Contact
+
+- Twitter: [@theshawwn](https://twitter.com/theshawwn)
+- HN: [sillysaurusx](https://news.ycombinator.com/item?id=23346972)
+- ML discord: [https://discordapp.com/invite/x52Xz3y](https://discordapp.com/invite/x52Xz3y)
+- Support me on patreon: [patreon.com/shawwn](https://patreon.com/shawwn)
+
+## Quickstart
 
 ```sh
 # setup.
@@ -86,9 +94,10 @@ $ curl 'http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20n
 
 Or just [open the JSON endpoint in your browser](http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true) and start playing around with the query params.
 
-## a simple bash script for dumping completions
+## Examples
 
-example:
+### A simple bash script for dumping completions
+
 ```sh
 $ T=0.8 M=32 bash 002_test_completion.sh 'Hello, my name is'
 Hello, my name is Plato and, like many of you, I am very happy with the pre-release.
@@ -106,54 +115,61 @@ You can set the temperature using `T=0.8` and the token count using `M=32`:
 T=0.8 M=32 bash 002_test_completion.sh 'Hello there. My name is'
 ```
 
-To read a prompt from a file, simply pass in the filename. If the first argument is a valid filename, the file will be read in and used as the prompt.
-
-You can use very long prompts, like README.md:
+To read a prompt from a file, simply pass in the filename. If the first argument is a valid filename, the file becomes the prompt:
 ```sh
 T=0.8 M=32 bash 002_test_completion.sh README.md
 ```
 
-If the prompt is too long, the last `1023 - M` tokens of the prompt are used. **Note**: This means if you request 500 tokens, it will only use `1023 minus 500` tokens from the prompt. Therefore, to let GPT see as many tokens as possible, request a small number of tokens at once (e.g. 16).
+If the prompt is too long, the last `1023 - M` tokens of the prompt are used. **Note**: This means if you request 500 tokens, it will only use `1023 minus 500` tokens from the prompt. Therefore, to let GPT see as many tokens as possible, request a small number of tokens (e.g. 16).
 
-## a complete usage example
+### Setting up everything from scratch
 
 ```sh
+# grab the code.
+git clone https://github.com/shawwn/openai-api
+cd openai-api
+
+# install dependencies.
 pip3 install -r requirements.txt
-```
 
-grab all models (requires ~8GB of disk space; if low, just download 117M, which only requires 550MB)
-```sh
+# grab all models (requires ~8GB of disk space; if low, just download 117M, which only requires 550MB)
 python3 download_model.py 117M
 python3 download_model.py 345M
 python3 download_model.py 774M
 python3 download_model.py 1558M
-```
 
-then, do *one* of the following:
-```sh
-# serve one specific model
+# then, do *one* of the following:
+
+# ...serve one specific model:
 MODELS=117M bash prod.sh
 
-# ...or serve multiple models
-MODELS=117M,345M bash prod.sh
+# ...or serve multiple models:
+MODELS=1558M,117M bash prod.sh
 
-# ...or serve all models you've downloaded (the default)
+# ...or serve all models you've downloaded (the default):
 bash prod.sh
 ```
 
-The default port is 9000. You can change it by setting `PORT`, e.g.:
+The server listens on port 9000 by default. You can change it via PORT:
 ```sh
-PORT=3000 bash prod.sh
+PORT=9000 bash prod.sh
 ```
 
-Once the server is running, you can open a different terminal and start making API requests:
+Now that the server is running, you can start making API requests via `002_test_completion.sh`:
+```sh
+bash 002_test_completion.sh 'Hello there. My name is'
+```
+
+Or fetch completions from the JSON endpoint:
 ```sh
 curl -s 'http://localhost:9000/v1/engines/117M/completions?echo=true&prompt=Hello,%20world' | jq .choices[].text
 ```
 
-Or [open the endpoint in your browser](http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true).
+Or [open the endpoint in your browser](http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true) and mess with query params.
 
-## a warning about frequency_penalty
+## Notes
+
+### A warning about frequency_penalty
 
 for 1558M, the best results seem to come from `temperature=0.6` and `frequency_penalty=0.9`:
 ```sh
@@ -162,7 +178,7 @@ curl 'http://localhost:9000/v1/engines/1558M/completions?prompt=Hello,%20my%20na
 
 But beware: you shouldn't use `frequency_penalty` unless your model is the largest (1558M, commonly known as "1.5B"). For some reason, `frequency_penalty` causes the output to be scrambled when the model is smaller than 1558M.
 
-## running in production
+### Running in production
 
 For production usage, consider running it via the following command:
 
@@ -174,11 +190,12 @@ That way, if the server terminates for any reason, it will automatically restart
 
 For endpoint monitoring, I recommend [updown.io](https://updown.io/).
 
+## Community
 
-# ML Discord
+### Join the ML Discord
 
 If you're an ML enthusiast, join the [ML Discord](https://discordapp.com/invite/x52Xz3y).
-There are now ~800 members, with ~120 online at any given time:
+There are ~800 members, with ~120 online at any given time:
 
 ![image](https://user-images.githubusercontent.com/59632/84269906-bc7d2080-aade-11ea-8b4e-f78412855d43.png)
 
@@ -193,7 +210,7 @@ There are a variety of interesting channels:
 - `#cats`, `#doggos`, and of course `#memes`
 - Quite a few more.
 
-# Support
+## Support me
 
 *If you found this library helpful, consider [joining my patreon](https://patreon.com/shawwn).*
 
