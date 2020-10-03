@@ -18,16 +18,30 @@ To get started, see the [quickstart](#Quickstart) or the [examples](#Examples) o
 ## Quickstart
 
 ```sh
-# setup.
+# grab the code.
+git clone https://github.com/shawwn/openai-server
+cd openai-server
+
+# install dependencies.
 pip3 install -r requirements.txt
+
 # grab a gpt-2 model.
 python3 download_model.py 117M # or 345M, 774M, 1558M
+
 # start the server.
 MODELS=117M bash prod.sh
+
+# in a new terminal, ask for a completion.
+bash 002_test_completion.sh 'Hello there. My name is'
 ```
+
 Your server is now serving the OpenAI API at localhost:9000. (You can change the port via `export PORT=8000`)
 
-Then, in a separate terminal, grab some completions using the official `openai` command-line tool:
+## Examples
+
+### Generating completions via the `openai` SDK
+
+You can grab some completions using the official `openai` command-line tool:
 ```sh
 $ OPENAI_API_BASE=http://localhost:9000 openai api completions.create -e davinci -p 'Hello, world' -t 0.8 -M 16 -n 4
 ===== Completion 0 =====
@@ -42,7 +56,8 @@ Hello, world controlled enemy.
 "Be careful. We have come across a near total
 ```
 
-continuously dump completions to the terminal:
+
+### Continuously dump completions to terminal
 ```sh
 $ bash 003_completions.sh 'Yo dawg, we implemented OpenAI API'
 Yo dawg, we implemented OpenAI API. Now, we have the ability to connect to Signal, a cryptographic data store.
@@ -55,7 +70,7 @@ We are an open consortium and we believe that the blockchain is the bridge betwe
 ^C
 ```
 
-fetch the JSON endpoint manually:
+### Fetch the JSON endpoint manually
 ```sh
 $ curl 'http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true'
 {
@@ -92,9 +107,9 @@ $ curl 'http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20n
 }
 ```
 
-Or just [open the JSON endpoint in your browser](http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true) and start playing around with the query params.
+### Explore via your browser
 
-## Examples
+You can [open the JSON endpoint in your browser](http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true) and start playing around with the query params.
 
 ### A simple bash script for dumping completions
 
@@ -124,6 +139,8 @@ If the prompt is too long, the last `1023 - M` tokens of the prompt are used. **
 
 ### Setting up everything from scratch
 
+A complete example of how to go from zero code to a fully functional OpenAI API server:
+
 ```sh
 # grab the code.
 git clone https://github.com/shawwn/openai-server
@@ -152,20 +169,10 @@ bash prod.sh
 
 The server listens on port 9000 by default. You can change it via PORT:
 ```sh
-PORT=9000 bash prod.sh
+PORT=8080 bash prod.sh
 ```
 
-Now that the server is running, you can start making API requests via `002_test_completion.sh`:
-```sh
-bash 002_test_completion.sh 'Hello there. My name is'
-```
-
-Or fetch completions from the JSON endpoint:
-```sh
-curl -s 'http://localhost:9000/v1/engines/117M/completions?echo=true&prompt=Hello,%20world' | jq .choices[].text
-```
-
-Or [open the endpoint in your browser](http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true) and mess with query params.
+Now that the server is running, you can start making API requests. See [examples](#Examples).
 
 ## Notes
 
