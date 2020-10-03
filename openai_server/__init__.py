@@ -116,9 +116,8 @@ class GPTEngine:
     prompt = self.fix(prompt)
     with self.session.as_default() as sess, self.graph.as_default() as graph:
       tokens = self.encode(prompt)
-      if len(tokens) + max_tokens >= self.hparams.n_ctx:
-        offset = self.hparams.n_ctx - (self.hparams.n_ctx - max_tokens - 1)
-        tokens = tokens[offset:]
+      while len(tokens) + max_tokens >= self.hparams.n_ctx:
+        tokens = tokens[1:]
       length = max_tokens
       for i in range(n):
         params = {
