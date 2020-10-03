@@ -3,3 +3,5 @@ sanic-cors
 tokenizers
 transformers
 regex
+tqdm
+tensorflow>=1.14.0

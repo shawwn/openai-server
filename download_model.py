@@ -14,9 +14,21 @@ if not os.path.exists(subdir):
     os.makedirs(subdir)
 subdir = subdir.replace('\\','/') # needed for Windows
 
-for filename in ['checkpoint','encoder.json','hparams.json','model.ckpt.data-00000-of-00001', 'model.ckpt.index', 'model.ckpt.meta', 'vocab.bpe']:
+name = 'model.ckpt'
 
-    r = requests.get("https://storage.googleapis.com/gpt-2/" + subdir + "/" + filename, stream=True)
+for filename in ['checkpoint','hparams.json','encoder.json','vocab.bpe','model.ckpt.index', 'model.ckpt.meta', 'model.ckpt.data-00000-of-00001']:
+
+    filename = filename.replace('model.ckpt', name)
+
+    bucket = os.environ.get('BUCKET', 'gpt-2')
+    path = os.environ.get('MODEL_DIR', 'gs://{bucket}/{subdir}'.format(bucket=bucket, subdir=subdir)).lstrip('gs:').strip('/')
+    url = "https://storage.googleapis.com/" + path + "/" + filename
+    r = requests.get(url, stream=True)
+    if not r.ok and filename == 'checkpoint':
+        raise FileNotFoundError(url)
+    
+    if not r.ok:
+        continue
 
     with open(os.path.join(subdir, filename), 'wb') as f:
         file_size = int(r.headers["content-length"])
@@ -26,3 +38,10 @@ for filename in ['checkpoint','encoder.json','hparams.json','model.ckpt.data-000
             for chunk in r.iter_content(chunk_size=chunk_size):
                 f.write(chunk)
                 pbar.update(chunk_size)
+    if filename == 'checkpoint':
+        with open(os.path.join(subdir, filename)) as f:
+            for line in f:
+                if line.startswith('model_checkpoint_path'):
+                    name = line.split(':', 1)[1].strip().strip('"')
+
+        
