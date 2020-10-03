@@ -6,7 +6,7 @@ Specifically, we implement `/v1/engines/list` and `/v1/engines/{model_name}/comp
 
 Both endpoints are mostly feature-complete, with a few differences. The JSON response is identical; any library that works with the OpenAI API will probably work with this.
 
-To get started, see the [quickstart](#Quickstart) or the [examples](#Examples).
+To get started, see the [quickstart](#Quickstart) or the [examples](#Examples) or the [JavaScript API](https://github.com/shawwn/tensorfork-openai-api).
 
 ## Contact
 
