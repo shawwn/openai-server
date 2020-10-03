@@ -126,8 +126,8 @@ If the prompt is too long, the last `1023 - M` tokens of the prompt are used. **
 
 ```sh
 # grab the code.
-git clone https://github.com/shawwn/openai-api
-cd openai-api
+git clone https://github.com/shawwn/openai-server
+cd openai-server
 
 # install dependencies.
 pip3 install -r requirements.txt
