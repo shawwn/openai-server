@@ -1,35 +1,199 @@
 # openai-server
 
-A clone of OpenAI's GPT-3 API.
+`openai-server` is an implementation of the OpenAI API.
+
+This codebase implements `/v1/engines/list` and `/v1/engines/{model_name}/completions` endpoints.
+
+The completions endpoint is mostly feature-complete vs the official OpenAI API endpoint. The JSON response is identical.
+
 
 ## quickstart
 
 ```sh
-# setup
+# setup.
 pip3 install -r requirements.txt
+# grab a gpt-2 model.
+python3 download_model.py 117M # or 345M, 774M, 1558M
+# start the server.
+MODELS=117M bash prod.sh
+```
+Your server is now serving the OpenAI API at localhost:9000. (You can change the port via `export PORT=8000`)
 
-# download some gpt-2 models. (If you're out of drive space, just download 117M and skip the others.)
+Then, in a separate terminal, grab some completions using the official `openai` command-line tool:
+```sh
+$ OPENAI_API_BASE=http://localhost:9000 openai api completions.create -e davinci -p 'Hello, world' -t 0.8 -M 16 -n 4
+===== Completion 0 =====
+Hello, world. It seems like a good idea to make a living. The fact that it
+===== Completion 1 =====
+Hello, world. This is not the first time you're seeing the same thing at any given
+===== Completion 2 =====
+Hello, world, please do my best to continue the development of Monad and its conforming
+===== Completion 3 =====
+Hello, world controlled enemy.
+
+"Be careful. We have come across a near total
+```
+
+continuously dump completions to the terminal:
+```sh
+$ bash 003_completions.sh 'Yo dawg, we implemented OpenAI API'
+Yo dawg, we implemented OpenAI API. Now, we have the ability to connect to Signal, a cryptographic data store.
+
+We can now make this secure by using new kid on the block chain, OpenAI.
+
+OpenAI is the new block chain protocol for the internet. This is a major milestone. As the internet becomes more open and open for everybody, it is important for us to have a robust, high-quality blockchain. It is also important that we never create an untraceable chain. The blockchain is the only way to guarantee that everyone has the same access to the network.
+
+We are an open consortium and we believe that the blockchain is the bridge between the internet and the rest of the world. We're committed to this project. We believe that the blockchain is a bridge between the internet and
+^C
+```
+
+fetch the JSON endpoint manually:
+```sh
+$ curl 'http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true'
+{
+  "choices": [
+    {
+      "finish-reason": "length",
+      "index": 0,
+      "logprobs": null,
+      "text": "Hello, my name is Loium Chazz, and I have been far from satisfied with your departure. But I will, at least by some chance, give you permission to decide for"
+    },
+    {
+      "finish-reason": "length",
+      "index": 1,
+      "logprobs": null,
+      "text": "Hello, my name is Tim and my name is Jodie. Yours, Tom.\n\nTim: Oh hello, my name is Tim.\n\nJB: Where?'"
+    },
+    {
+      "finish-reason": "length",
+      "index": 2,
+      "logprobs": null,
+      "text": "Hello, my name is Rosen Sylvan. That's right, Buck Paoli, who was a member of the Board of Governors for George W. Bush in the 2009 Democratic primary\u2014"
+    },
+    {
+      "finish-reason": "length",
+      "index": 3,
+      "logprobs": null,
+      "text": "Hello, my name is Nick Martens, I am an English-speaking Canadian, University of Toronto, Mississauga, Canada. I work in a computer software company located in Canada."
+    }
+  ],
+  "created": 1601701785.777768,
+  "id": "cmpl-3qN8kwW1Ya7_qxWz4h8wuIzN",
+  "model": "117M",
+  "object": "text_completion"
+}
+```
+
+Or just [open the JSON endpoint in your browser](http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true) and start playing around with the query params.
+
+## a simple bash script for dumping completions
+
+example:
+```sh
+$ T=0.8 M=32 bash 002_test_completion.sh 'Hello, my name is'
+Hello, my name is Plato and, like many of you, I am very happy with the pre-release.
+
+The primary goal of the pre-release was to provide
+```
+
+The first argument to `002_test_completion.sh` is the prompt:
+```sh
+bash 002_test_completion.sh 'Hello there. My name is'
+```
+
+You can set the temperature using `T=0.8` and the token count using `M=32`:
+```sh
+T=0.8 M=32 bash 002_test_completion.sh 'Hello there. My name is'
+```
+
+To read a prompt from a file, simply pass in the filename. If the first argument is a valid filename, the file will be read in and used as the prompt.
+
+You can use very long prompts, like README.md:
+```sh
+T=0.8 M=32 bash 002_test_completion.sh README.md
+```
+
+If the prompt is too long, the last `1023 - M` tokens of the prompt are used. **Note**: This means if you request 500 tokens, it will only use `1023 minus 500` tokens from the prompt. Therefore, to let GPT see as many tokens as possible, request a small number of tokens at once (e.g. 16).
+
+## a complete usage example
+
+```sh
+pip3 install -r requirements.txt
+```
+
+grab all models (requires ~8GB of disk space; if low, just download 117M, which only requires 550MB)
+```sh
 python3 download_model.py 117M
 python3 download_model.py 345M
 python3 download_model.py 774M
 python3 download_model.py 1558M
+```
 
-# then, do ONE of the following. Either...
-
-# ...serve one specific model,
+then, do *one* of the following:
+```sh
+# serve one specific model
 MODELS=117M bash prod.sh
-# ...or serve multiple models,
+
+# ...or serve multiple models
 MODELS=117M,345M bash prod.sh
+
 # ...or serve all models you've downloaded (the default)
 bash prod.sh
-
-# now you can open a different terminal and run:
-curl 'http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true'
-
-# for 1558M, the best results seem to come from temperature=0.4 and frequency_penalty=0.9:
-curl 'http://localhost:9000/v1/engines/1558M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.4&frequency_penalty=0.9&echo=true'
-
-# Warning: you shouldn't use frequency_penalty unless your model is
-# the largest (1.5B). For some reason, frequency_penalty causes the
-# output to be scrambled when used with any smaller model.
 ```
+
+The default port is 9000. You can change it by setting `PORT`, e.g.:
+```sh
+PORT=3000 bash prod.sh
+```
+
+Once the server is running, you can open a different terminal and start making API requests:
+```sh
+curl -s 'http://localhost:9000/v1/engines/117M/completions?echo=true&prompt=Hello,%20world' | jq .choices[].text
+```
+
+Or [open the endpoint in your browser](http://localhost:9000/v1/engines/117M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.9&echo=true).
+
+## a warning about frequency_penalty
+
+for 1558M, the best results seem to come from `temperature=0.6` and `frequency_penalty=0.9`:
+```sh
+curl 'http://localhost:9000/v1/engines/1558M/completions?prompt=Hello,%20my%20name%20is&max_tokens=32&n=4&temperature=0.4&frequency_penalty=0.9&echo=true'
+```
+
+But beware: you shouldn't use `frequency_penalty` unless your model is the largest (1558M, commonly known as "1.5B"). For some reason, `frequency_penalty` causes the output to be scrambled when the model is smaller than 1558M.
+
+## running in production
+
+For production usage, consider running it via the following command:
+
+```sh
+while true; do MODELS=117M bash prod.sh ; sleep 20 ; done
+```
+
+That way, if the server terminates for any reason, it will automatically restart.
+
+For endpoint monitoring, I recommend [updown.io](https://updown.io/).
+
+
+# ML Discord
+
+If you're an ML enthusiast, join the [ML Discord](https://discordapp.com/invite/x52Xz3y).
+There are now ~800 members, with ~120 online at any given time:
+
+![image](https://user-images.githubusercontent.com/59632/84269906-bc7d2080-aade-11ea-8b4e-f78412855d43.png)
+
+There are a variety of interesting channels:
+
+- `#papers` for pointing out interesting research papers
+- `#research` for discussing ML research
+- `#show` and `#samples` for showing off your work
+- `#hardware` for hardware enthusiasts
+- `#ideas` for brainstorming
+- `#tensorflow` and `#pytorch`
+- `#cats`, `#doggos`, and of course `#memes`
+- Quite a few more.
+
+# Support
+
+*If you found this library helpful, consider [joining my patreon](https://patreon.com/shawwn).*
+
