@@ -291,7 +291,21 @@ async def v1_engines_completions(request, engine_name):
     kws = dict(parse.parse_qsl(query))
     kws = {k: number(v) for k, v in kws.items()}
   pp(kws)
-  engine = api.engines[engine_name]
+  engine = None
+  if engine_name in api.engines:
+    engine = api.engines[engine_name]
+  else:
+    # rather than throw an error when someone attempts to use an
+    # invalid engine, silently fall back to any valid engine for
+    # simplicity. E.g. if they try to request 'davinci' but you're
+    # serving 117M, then automatically fall back to 117M.
+    for info in api.engines_list():
+      print('Warning: attempted to use invalid enngine {!r}; falling back to engine {!r}'.format(engine_name, info['id']))
+      engine = api.engines[info['id']]
+      break
+  if engine is None:
+    raise RuntimeError("Not serving any models. Try running `python3 download_model.py 117M` and be sure to `export MODELS=117M` before starting the server.")
+      
   choices = []
   for choice in engine.completion(**kws):
     choices.append(choice)
