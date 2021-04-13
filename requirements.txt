@@ -4,5 +4,6 @@ tokenizers
 transformers
 regex
 tqdm
+ftfy
 tensorflow>=1.15.0
 openai
