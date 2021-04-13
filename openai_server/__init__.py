@@ -17,7 +17,7 @@ from pprint import pprint as pp
 
 from openai_server.gpt import sample, model, encoder
 
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import ftfy
 
 from tokenizers import Tokenizer
@@ -87,6 +87,21 @@ class GPTEngine:
         return result
     return result.ids
 
+  def stop_text_1(self, stop, completion_text):
+    if completion_text.startswith(stop):
+      return stop + self.stop_text_1(stop, completion_text[len(stop):])
+    return completion_text.split(stop, 1)[0]
+
+  def stop_text(self, stops, completion_text):
+    if stops is None:
+      return False, completion_text
+    if not isinstance(stops, (list, tuple)):
+      stops = [stops]
+    original_text = completion_text
+    for stop in stops:
+      completion_text = self.stop_text_1(stop, completion_text)
+    return original_text != completion_text, completion_text
+
 
   def completion(self, prompt, n=None, max_tokens=None, logprobs=None, stream=False, temperature=None, top_p=None, top_k=None, echo=None, frequency_penalty=None, best_of=None, stop=None, **kws):
     if temperature is None:
@@ -113,37 +128,40 @@ class GPTEngine:
       print('Stop: {!r}'.format(stop))
     if len(kws) > 0:
       print('Got extra keywords: {!r}'.format(kws))
-    prompt = self.fix(prompt)
-    with self.session.as_default() as sess, self.graph.as_default() as graph:
-      tokens = self.encode(prompt)
-      while len(tokens) + max_tokens >= self.hparams.n_ctx:
-        tokens = tokens[1:]
-      length = max_tokens
-      for i in range(n):
-        params = {
-          self.temperature: temperature,
-          self.top_p: top_p,
-          self.top_k: top_k,
-          self.frequency_penalty: frequency_penalty,
-          self.length: length,
-        }
-        print(params)
-        result = self.session.run(self.output, {self.context: [tokens], **params})
-        result_tokens = result[0]
-        completion = result_tokens[len(tokens):]
-        completion_text = self.encoder.decode(completion)
-        finish_reason = 'length'
-        if stop is not None:
-          for s in stop:
-            if s in completion_text:
-              completion_text = completion_text.split(s, 1)[0]
-              finish_reason = 'stop'
-        if echo:
-          text = prompt + completion_text
-        else:
-          text = completion_text
-        print(repr(text))
-        yield {'index': i, 'logprobs': None, 'text': text, 'finish-reason': finish_reason}
+    prompts = prompt if isinstance(prompt, (list, tuple)) else [prompt]
+    prompts = list(prompts)
+    for prompt in prompts:
+      prompt = self.fix(prompt)
+      with self.session.as_default() as sess, self.graph.as_default() as graph:
+        tokens = self.encode(prompt)
+        while len(tokens) + max_tokens >= self.hparams.n_ctx:
+          tokens = tokens[1:]
+        length = max_tokens
+        for i in range(n):
+          params = {
+            self.temperature: temperature,
+            self.top_p: top_p,
+            self.top_k: top_k,
+            self.frequency_penalty: frequency_penalty,
+            self.length: length,
+          }
+          print(params)
+          result = self.session.run(self.output, {self.context: [tokens], **params})
+          result_tokens = result[0]
+          #completion = result_tokens[len(tokens):]
+          completion = result_tokens
+          completion_text = self.encoder.decode(completion)
+          print('completion_text = {!r}'.format(completion_text))
+          finish_reason = 'length'
+          stopped, completion_text = self.stop_text(stop, completion_text)
+          if stopped:
+            finish_reason = 'stop'
+          if echo:
+            text = prompt + completion_text
+          else:
+            text = completion_text
+          print(repr(text))
+          yield {'index': i, 'logprobs': None, 'text': text, 'finish-reason': finish_reason}
 
 class API:
   def __init__(self, model_path=None):
@@ -178,7 +196,7 @@ class API:
 
 api = API()
 
-app = Sanic()
+app = Sanic(name='openai-server')
 CORS(app)
 
 
@@ -314,7 +332,11 @@ async def v1_engines_completions(request, engine_name):
   #return json({"id": "cmpl-Wt5z1RZglyDHHl0SnSvKWVzA", "object": "text_completion", "created": 1599616871, "model": "davinci:2020-05-03", "choices": [{"text": "Test.SetLayerPropertiesWithNonContainedInvisible (", "index": 0, "logprobs": None, "finish_reason": "length"}]})
     
 if __name__ == '__main__':
+  tf.enable_v2_behavior()
+  tf.enable_resource_variables()
+  from tensorflow.python.framework.ops import disable_eager_execution
+  disable_eager_execution()
   args = sys.argv[1:]
   port = int(args[0] if len(args) > 0 else os.environ.get('PORT', '9000'))
-  app.run(host='0.0.0.0', port=port)
+  app.run(host='0.0.0.0', port=port, debug=True)
 

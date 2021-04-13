@@ -1,4 +1,4 @@
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 import model
 
@@ -47,7 +47,7 @@ def penalize_used(logits, output, frequency_penalty=0.85):
     return result
 
 
-def top_k_logits(logits, k):
+def top_k_logits(logits, k, epsilon=-1e10):
     if k == 0:
         # no truncation
         return logits
@@ -57,7 +57,7 @@ def top_k_logits(logits, k):
         min_values = values[:, -1, tf.newaxis]
         return tf.where(
             logits < min_values,
-            tf.ones_like(logits, dtype=logits.dtype) * -1e10,
+            tf.ones_like(logits, dtype=logits.dtype) * epsilon,
             logits,
         )
     return tf.cond(
@@ -67,7 +67,7 @@ def top_k_logits(logits, k):
     )
 
 
-def top_p_logits(logits, p):
+def top_p_logits(logits, p, epsilon=1e10):
     """Nucleus sampling"""
     batch, _ = logits.shape.as_list()
     sorted_logits = tf.sort(logits, direction='DESCENDING', axis=-1)
@@ -80,12 +80,85 @@ def top_p_logits(logits, p):
     min_values = tf.gather_nd(sorted_logits, indices)
     return tf.where(
         logits < min_values,
-        tf.ones_like(logits) * -1e10,
+        tf.ones_like(logits) * epsilon,
         logits,
     )
 
 
-def sample_sequence(*, hparams, length, start_token=None, batch_size=None, context=None, temperature=1, top_k=0, top_p=1, frequency_penalty=0.0):
+# def sample_sequence(*, hparams, length, start_token=None, batch_size=None, context=None, temperature=1, top_k=0, top_p=1, frequency_penalty=0.0):
+#     if start_token is None:
+#         assert context is not None, 'Specify exactly one of start_token and context!'
+#     else:
+#         assert context is None, 'Specify exactly one of start_token and context!'
+#         context = tf.fill([batch_size, 1], start_token)
+
+#     def step(hparams, tokens, past=None):
+#         lm_output = model.model(hparams=hparams, X=tokens, past=past, reuse=tf.AUTO_REUSE)
+
+#         logits = lm_output['logits'][:, :, :hparams.n_vocab]
+#         presents = lm_output['present']
+#         presents.set_shape(model.past_shape(hparams=hparams, batch_size=batch_size))
+#         return {
+#             'logits': logits,
+#             'presents': presents,
+#         }
+
+#     with tf.name_scope('sample_sequence'):
+#         def body(past, prev, output):
+#           prev2 = prev[:, tf.newaxis]
+#           # import pdb; pdb.set_trace()
+#           next_outputs = step(hparams, prev2, past=past)
+#           logits = next_outputs['logits'][:, -1, :]  / tf.to_float(temperature)
+#           # TODO: This is causing problems for models smaller than
+#           # 1558M, so disable it for now.
+#           # if frequency_penalty != 0.0:
+#           #     logits = penalize_used(logits, output, frequency_penalty=frequency_penalty)
+#           # logits = top_k_logits(logits, k=top_k)
+#           # logits = top_p_logits(logits, p=top_p)
+#           samples = tf.multinomial(logits, num_samples=1, output_dtype=tf.int32)
+#           # import pdb; pdb.set_trace()
+#           return (
+#               next_outputs['presents'] if past is None else tf.concat([past, next_outputs['presents']], axis=-2),
+#               tf.squeeze(samples, axis=[1]),
+#               tf.concat([output, samples], axis=1)
+#           )
+
+#         prev = context[:, -1]
+#         output = context
+
+#         #import pdb; pdb.set_trace()
+#         if True:
+#           maximum_iterations = length - 1
+#           past, prev, output = body(None, prev, output)
+#         else:
+#           maximum_iterations = length
+#           sh=model.past_shape(hparams=hparams, batch_size=batch_size);
+#           sh[-2] = 0;
+#           past = tf.zeros(sh)
+
+#         def cond(*args):
+#             return True
+
+#         _, _, tokens = tf.while_loop(
+#             cond=cond, body=body,
+#             maximum_iterations=length,
+#             loop_vars=[
+#                 past,
+#                 prev,
+#                 output,
+#             ],
+#             shape_invariants=[
+#                 tf.TensorShape(model.past_shape(hparams=hparams, batch_size=batch_size)),
+#                 tf.TensorShape([batch_size]),
+#                 tf.TensorShape([batch_size, None]),
+#             ],
+#             back_prop=False,
+#         )
+
+#         return tokens
+
+
+def sample_sequence(*, hparams, length, start_token=None, batch_size=None, context=None, temperature=1, top_k=0, top_p=0.0, epsilon=-1e10, frequency_penalty=0.0):
     if start_token is None:
         assert context is not None, 'Specify exactly one of start_token and context!'
     else:
@@ -94,6 +167,8 @@ def sample_sequence(*, hparams, length, start_token=None, batch_size=None, conte
 
     def step(hparams, tokens, past=None):
         lm_output = model.model(hparams=hparams, X=tokens, past=past, reuse=tf.AUTO_REUSE)
+        if hparams.dtype != tf.float32:
+            lm_output["logits"] = tf.cast(lm_output["logits"], tf.float32)
 
         logits = lm_output['logits'][:, :, :hparams.n_vocab]
         presents = lm_output['present']
@@ -104,39 +179,46 @@ def sample_sequence(*, hparams, length, start_token=None, batch_size=None, conte
         }
 
     with tf.name_scope('sample_sequence'):
+        # Don't feed the last context token -- leave that to the loop below
+        # TODO: Would be slightly faster if we called step on the entire context,
+        # rather than leaving the last token transformer calculation to the while loop.
+        context_output = step(hparams, context[:, :-1])
+
         def body(past, prev, output):
-            next_outputs = step(hparams, prev, past=past)
+            # import pdb; pdb.set_trace()
+            next_outputs = step(hparams, prev[:, tf.newaxis], past=past)
             logits = next_outputs['logits'][:, -1, :]  / tf.to_float(temperature)
-            if frequency_penalty != 0.0:
-                logits = penalize_used(logits, output, frequency_penalty=frequency_penalty)
-            logits = top_k_logits(logits, k=top_k)
-            logits = top_p_logits(logits, p=top_p)
+            # if frequency_penalty != 0.0:
+            # logits = penalize_used(logits, output, penalize=frequency_penalty)
+            # if top_p != 0.0:
+            # logits = top_p_logits(logits, p=top_p, epsilon=epsilon)
+            # else:
+            #logits = top_k_logits(logits, k=top_k, epsilon=epsilon)
             samples = tf.multinomial(logits, num_samples=1, output_dtype=tf.int32)
             return [
-                next_outputs['presents'] if past is None else tf.concat([past, next_outputs['presents']], axis=-2),
-                samples,
-                tf.concat([output, samples], axis=1)
+                tf.concat([past, next_outputs['presents']], axis=-2),
+                tf.squeeze(samples, axis=[1]),
+                tf.concat([output, samples], axis=1),
             ]
-
-        past, prev, output = body(None, context, context)
 
         def cond(*args):
             return True
 
         _, _, tokens = tf.while_loop(
             cond=cond, body=body,
-            maximum_iterations=length - 1,
+            maximum_iterations=length,
             loop_vars=[
-                past,
-                prev,
-                output
+                context_output['presents'],
+                context[:, -1],
+                context,
             ],
             shape_invariants=[
                 tf.TensorShape(model.past_shape(hparams=hparams, batch_size=batch_size)),
-                tf.TensorShape([batch_size, None]),
+                tf.TensorShape([batch_size]),
                 tf.TensorShape([batch_size, None]),
             ],
             back_prop=False,
         )
 
         return tokens
+
