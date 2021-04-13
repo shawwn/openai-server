@@ -22,7 +22,7 @@ for filename in ['checkpoint','hparams.json','encoder.json','vocab.bpe','model.c
 
     bucket = os.environ.get('BUCKET', 'gpt-2')
     path = os.environ.get('MODEL_DIR', 'gs://{bucket}/{subdir}'.format(bucket=bucket, subdir=subdir)).lstrip('gs:').strip('/')
-    url = "https://storage.googleapis.com/" + path + "/" + filename
+    url = "https://openaipublic.blob.core.windows.net/" + path + "/" + filename
     r = requests.get(url, stream=True)
     if not r.ok and filename == 'checkpoint':
         raise FileNotFoundError(url)
