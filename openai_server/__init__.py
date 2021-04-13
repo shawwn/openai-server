@@ -148,8 +148,7 @@ class GPTEngine:
           print(params)
           result = self.session.run(self.output, {self.context: [tokens], **params})
           result_tokens = result[0]
-          #completion = result_tokens[len(tokens):]
-          completion = result_tokens
+          completion = result_tokens[len(tokens):]
           completion_text = self.encoder.decode(completion)
           print('completion_text = {!r}'.format(completion_text))
           finish_reason = 'length'
