@@ -88,6 +88,8 @@ class GPTEngine:
     return result.ids
 
   def stop_text_1(self, stop, completion_text):
+    if stop is None or len(stop) <= 0:
+      return completion_text
     if completion_text.startswith(stop):
       return stop + self.stop_text_1(stop, completion_text[len(stop):])
     return completion_text.split(stop, 1)[0]
