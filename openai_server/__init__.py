@@ -20,8 +20,8 @@ from openai_server.gpt import sample, model, encoder
 import tensorflow.compat.v1 as tf
 import ftfy
 
-from tokenizers import Tokenizer
-from transformers import GPT2TokenizerFast
+#from tokenizers import Tokenizer
+#from transformers import GPT2Tokenizer
 
 
 class GPTEngine:
@@ -34,8 +34,8 @@ class GPTEngine:
     self.graph = tf.Graph()
     self.config = tf.ConfigProto(allow_soft_placement=True, log_device_placement=True)
     self.session = tf.Session(graph=self.graph, config=self.config)
-    #self.encoder = encoder.get_encoder(model_name, self.api.model_path)
-    self.encoder = GPT2TokenizerFast.from_pretrained("gpt2")
+    self.encoder = encoder.get_encoder(model_name, self.api.model_path)
+    #self.encoder = GPT2TokenizerFast.from_pretrained("gpt2")
     self.hparams = model.default_hparams()
     with open(os.path.join(self.api.model_path, model_name, 'hparams.json')) as f:
       params = json_load(f)
@@ -44,7 +44,7 @@ class GPTEngine:
       pp(self.session.list_devices())
       if 'CUDA_VISIBLE_DEVICES' in os.environ:
         print('Using /gpu:0 on device {}'.format(os.environ['CUDA_VISIBLE_DEVICES']))
-      with tf.device('/gpu:0' if 'CUDA_VISIBLE_DEVICES' in os.environ else None):
+      with tf.device('/gpu:0' if 'CUDA_VISIBLE_DEVICES' in os.environ else '/cpu:0'):
         self.batch_size = batch_size
         self.context = tf.placeholder(tf.int32, [self.batch_size, None], name="context")
         self.length = tf.placeholder(tf.int32, (), name="length")
