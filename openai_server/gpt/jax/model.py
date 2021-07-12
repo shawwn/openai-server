@@ -132,7 +132,8 @@ def randn(shape, stddev):
 # def gelu(x):
 #     return 0.5*x*(1+np.tanh(0.79788*(x+0.044715*x**3)))
 
-from jax.nn import gelu
+# from jax.nn import gelu
+from jax.experimental.stax import gelu
 
 @jax.jit
 def _norm(x, g, b, e=1e-5):
@@ -145,6 +146,7 @@ def _norm(x, g, b, e=1e-5):
     return x
 
 # @partial(jax.jit, static_argnames=['cx'])
+@jax.jit
 def norm(cx, x):
     axis = -1
     n_state = x.shape[axis]
@@ -183,6 +185,7 @@ def _dense(X_btk, W_kf, b_f, F):
     Y_bt_f = jnp.matmul(X_bt_k, W_kf) + b_f
     return jnp.reshape(Y_bt_f, (B, T, F))
 
+@partial(jax.jit, static_argnames=['F'])
 def dense(cx, X_btk, F):
     B, T, K = X_btk.shape
     W_kf = cx.get_variable("w", initializer=lambda: normc(K, F))
@@ -203,6 +206,7 @@ def past_length(past):
     KV_bthr = past
     return KV_bthr.shape[-3]
 
+# @partial(jax.jit, static_argnames=['n_state', 'n_head'])
 def attn(cx, X_btk, n_state, n_head, past=None):
     B, T, _K = X_btk.shape
     assert n_state % n_head==0
@@ -245,9 +249,10 @@ def attn(cx, X_btk, n_state, n_head, past=None):
     P_bts = dense(cx.scope('c_proj'), A_bts, n_state)
     return P_bts, present
 
+@partial(jax.jit, static_argnames=['n_hid'])
 def mlp(cx, X_bts, *, n_hid):
     S = X_bts.shape[-1]
-    H_bth = stax.gelu(dense(cx.scope('c_fc'), X_bts, n_hid))
+    H_bth = gelu(dense(cx.scope('c_fc'), X_bts, n_hid))
     Y_bts = dense(cx.scope('c_proj'), H_bth, S)
     return Y_bts
 
