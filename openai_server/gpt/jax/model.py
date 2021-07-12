@@ -14,6 +14,9 @@ import functools
 import time
 import random
 
+gBreak = False
+gBreak2 = False
+
 def load_tensor(reader, name: str) -> np.array:
   #name = '.'.join(name.split('/')[1:])
   value = reader.get_tensor(name)
@@ -125,11 +128,17 @@ def norm(cx, x, axis=-1):
     b = cx.get_variable("b", initializer=lambda : np.zeros(n_state, 'f'))
     return _norm(x, g=g, b=b, axis=axis)
 
+def attention_mask(nd, ns, *, dtype):
+    i = np.arange(nd)[:,None]
+    j = np.arange(ns)
+    m = i >= j - ns + nd
+    return m.astype(dtype)
+
 def mask_attn_weights(w):
-    n = w.shape[-1]
-    b = np.tril(np.ones((n,n)))
-    b = np.reshape(b, (1, 1, n, n))
-    w = w * b - 1e9 * (1 - b)
+    *_, nd, ns = w.shape
+    b = attention_mask(nd, ns, dtype=w.dtype)
+    b = np.reshape(b, (1, 1, nd, ns))
+    w = w * b - np.array(1e9, dtype=w.dtype) * (1 - b)
     return w
 
 def _attn(Q_bhtr, K_bhrt, V_bhtr):
@@ -151,13 +160,38 @@ def dense(cx, X_btk, F):
 def unstack(a, axis=0):
     return [np.squeeze(e, axis) for e in np.split(a, a.shape[axis], axis = axis)]
 
+def past_length(past):
+  if past is None:
+    return 0
+  elif isinstance(past, (list, tuple)):
+    K_bhrt, V_bhtr = past[0]
+    return K_bhrt.shape[-1]
+  else:
+    KV_bthr = past
+    return KV_bthr.shape[-3]
+
 def attn(cx, X_btk, n_state, n_head, past=None):
     B, T, _K = X_btk.shape
     assert n_state % n_head==0
     QKV_b_t_3s = dense(cx.scope('c_attn'), X_btk, n_state * 3)
     QKV_b_t_3h_r = np.reshape(QKV_b_t_3s, (B, T, 3 * n_head, n_state // n_head))
     Q_bthr, K_bthr, V_bthr = np.split(QKV_b_t_3h_r, 3, axis=2)
-    present = np.stack([K_bthr, V_bthr], axis=1)
+    # present = np.stack([K_bthr, V_bthr], axis=1)
+    # if past is not None:
+    #     pk, pv = unstack(past, axis=1)
+    #     K_bthr = np.concatenate([pk, K_bthr], axis=-3)
+    #     V_bthr = np.concatenate([pv, V_bthr], axis=-3)
+    Q_bhtr = np.transpose(Q_bthr, (0, 2, 1, 3))
+    K_bhrt = np.transpose(K_bthr, (0, 2, 3, 1))
+    V_bhtr = np.transpose(V_bthr, (0, 2, 1, 3))
+    #present = np.stack([K_bhrt, V_bhtr], axis=1)
+    # present = [K_bhrt, V_bhtr]
+    if past is not None:
+        # pk, pv = unstack(past, axis=1)
+        pk, pv = past
+        K_bhrt = np.concatenate([pk, K_bhrt], axis=-1)
+        V_bhtr = np.concatenate([pv, V_bhtr], axis=-2)
+    present = [K_bhrt, V_bhtr]
     # breakpoint()
     # (Pdb) present.shape
     # (1, 2, 1024, 12, 64)
@@ -165,17 +199,17 @@ def attn(cx, X_btk, n_state, n_head, past=None):
     # (1, 1024, 12, 64)
     # (Pdb) V_bthr.shape
     # (1, 1024, 12, 64)
-    if past is not None:
-        #breakpoint()
-        pk, pv = unstack(past, axis=1)
-        K_bthr = np.concatenate([pk, K_bthr], axis=-3)
-        V_bthr = np.concatenate([pv, V_bthr], axis=-3)
-    Q_bhtr = np.transpose(Q_bthr, (0, 2, 1, 3))
-    V_bhtr = np.transpose(V_bthr, (0, 2, 1, 3))
-    K_bhrt = np.transpose(K_bthr, (0, 2, 3, 1))
+    global gBreak
+    if gBreak:
+      gBreak = False
+      breakpoint()
+    global gBreak2
+    if gBreak2 and past is not None:
+      gBreak2 = False
+      breakpoint()
     A_bhtr = _attn(Q_bhtr, K_bhrt, V_bhtr)
     A_bthr = np.transpose(A_bhtr, (0, 2, 1, 3))
-    A_bts = np.reshape(A_bthr, (B, -1, n_state))
+    A_bts = np.reshape(A_bthr, (B, T, n_state))
     P_bts = dense(cx.scope('c_proj'), A_bts, n_state)
     return P_bts, present
 
@@ -196,16 +230,17 @@ def block(cx, x, *, n_head, past=None):
 def transformer(cx, tok_bt, *, n_vocab, n_head, n_layer, n_ctx, n_embd, past=None):
     B, T = tok_bt.shape
     pos_bt = jax.lax.broadcasted_iota(np.int32, (B, T), 1)
-    tokenembs_qe = cx.get_variable('wte', initializer=lambda : normc(n_vocab, n_embd) * 0.1)
-    posembs_pe = cx.get_variable('wpe', initializer=lambda : normc(n_ctx, n_embd) * 0.1)
-    tokenemb_bte = tokenembs_qe[tok_bt]
-    # assert isinstance(tok_bt, np.ndarray)
+    pos_bt = pos_bt + past_length(past)
+    tokenembs_qe = cx.get_variable('wte', initializer=lambda: normc(n_vocab, n_embd) * 0.1)
+    posembs_pe = cx.get_variable('wpe', initializer=lambda: normc(n_ctx, n_embd) * 0.1)
+    tokenemb_bte = tokenembs_qe[tuple(tok_bt)]
     posemb_bte = posembs_pe[pos_bt]
     last_bts = tokenemb_bte + posemb_bte
     if len(last_bts.shape) < 3:
         last_bts = last_bts[np.newaxis, ...]
     presents = []
-    pasts = unstack(past, axis=1) if past is not None else [None] * n_layer
+    #pasts = unstack(past, axis=1) if past is not None else [None] * n_layer
+    pasts = past if past is not None else [None] * n_layer
     prev_bts = None
     for layer in range(n_layer):
         prev_bts = last_bts
@@ -213,10 +248,19 @@ def transformer(cx, tok_bt, *, n_vocab, n_head, n_layer, n_ctx, n_embd, past=Non
         presents.append(present)
     last_bts = norm(cx.scope('ln_f'), last_bts, axis=-1)
     logits_btq = np.matmul(last_bts, tokenembs_qe.T)
-    logprobs_btq = stax.logsoftmax(logits_btq)    
     # breakpoint()
-    presents = np.stack(presents, axis=1)
-    return logprobs_btq, presents
+    #presents = np.stack(presents, axis=1)
+    return logits_btq, presents
+
+def scan(f, init, xs, length=None):
+  if xs is None:
+    xs = [None] * length
+  carry = init
+  ys = []
+  for x in xs:
+    carry, y = f(carry, x)
+    ys.append(y)
+  return carry, np.stack(ys)
 
 
 class TransformerV3:
@@ -250,7 +294,8 @@ class TransformerV3:
     X_bt = XY_bt[:, :-1]
     B, T = X_bt.shape
     Y_bt = XY_bt[:, 1:]
-    logprobs_btq, presents = self.model(self.cx, X_bt, past=past)
+    logits_btq, presents = self.model(self.cx, X_bt, past=past)
+    logprobs_btq = stax.logsoftmax(logits_btq)
     loglosses_bt = - logprobs_btq.reshape((B*T, -1))[ np.arange(B*T), Y_bt.reshape((-1,))]
     return loglosses_bt.mean(), presents
 
@@ -266,6 +311,36 @@ class TransformerV3:
     return tf.reduce_mean(loss), output['present']
     #loglosses_bt = - logprobs_btq.reshape((B*T, -1))[ np.arange(B*T), Y_bt.reshape((-1,))]
     #return loglosses_bt.mean()
+
+  def generate_one_token(self, context, sample_key=None, *, past=None, **sampler_options):
+    logprobs_btq, presents = self.model(self.cx, context, past=past)
+    sampler_input = None
+    if sample_key is None:
+      sample_key = jax.random.PRNGKey(random.randint(0, 2 ** 60))
+    sample_key, new_key = jax.random.split(sample_key)
+    sampler = self.config['sampler']
+    logits = logprobs_btq[..., -1:, :]
+    next_token, sample_info = sampler(sample_key, logits, sampler_input, **sampler_options)
+    return next_token, new_key, presents
+
+  def generate_tokens(self, tokenizer, prompt, length, sample_key=None, *, temp=0.8, **sampler_options):
+    for i in range(length):
+      context = np.array(tokenizer.encode(prompt))[None, :]
+      token, sample_key, past = self.generate_one_token(context, sample_key=sample_key, temp=temp, **sampler_options)
+      prompt += tokenizer.decode(token[0])
+    return prompt
+
+  def generate_tokens2(self, tokenizer, prompt, length, sample_key=None, *, temp=0.8, **sampler_options):
+    context = np.array(tokenizer.encode(prompt))[None, :]
+    past = None
+    for i in range(length):
+      context, sample_key, presents = self.generate_one_token(context, sample_key=sample_key, past=past, temp=temp, **sampler_options)
+      if past is None:
+        past = presents
+      else:
+        past = np.concatenate([past, presents], axis=-3)
+      prompt += tokenizer.decode(context[0])
+    return prompt
 
   def eval_xmap(self, state, obs, target, ctx_length, use_tf=False, past=None):
     XY_bt = jnp.concatenate([obs, target[:, -1:]], axis=-1)
@@ -289,39 +364,56 @@ class TransformerV3:
     print(f"eval done in {time.time() - start:.06}s")
     return out
 
-  def generate_initial(self, context, ctx_length):
+  def generate_initial(self, context, ctx_length, key):
     count = ctx_length[-1]
     assert (ctx_length == count).all()
-    initial_context = context[:, context.shape[-1] - count:]
+    initial_context = context[..., context.shape[-1] - count:-1]
+    last = context[..., -1:]
     logits, presents = self.model(self.cx, initial_context)
-    return logits, presents
+    # return logits, presents
+    initial_logits = logits[..., -1, :]
+    initial_presents = presents
+    return initial_logits, (last, initial_presents, key)
 
   def generate_once(self, next_token, decode_state):
-    breakpoint()
-    pass
+    logits, presents = self.model(self.cx, next_token, past=decode_state)
+    #assert logits.shape[-2] == 1
+    #next_logits = logits[..., -1, :]
+    next_logits = logits
+    # next_presents = np.concatenate([decode_state, presents], axis=-3)
+    next_presents = presents
+    return next_logits, next_presents
 
   def generate_xmap(self, state, key, ctx, ctx_length, aux, sampler_options):
     sampler = config["sampler"]
     gen_length = self.gen_length
 
     def generate_sample(context, ctx_length, aux):
-      _, initial_state = self.generate_initial(context, ctx_length)
+      # initial_logits, initial_presents = self.generate_initial(context, ctx_length)
+      # initial_state = [context[:, -1], initial_presents, key[0]]
+      _, initial_state = self.generate_initial(context, ctx_length, key=key[0])
 
       def generate_scan_fn(carry, sampler_input):
         next_token, decode_state, sample_key = carry
         sample_key, new_key = jax.random.split(sample_key)
 
+        # breakpoint()
         output, new_state = self.generate_once(next_token, decode_state)
         next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
 
-        output = (next_token, sample_info)
+        #output = (next_token, sample_info)
+        output = next_token
         new_carry = (next_token, new_state, new_key)
         return new_carry, output
 
-      logits, presents = self.model(self.cx, context[:, -1:], past=initial_state)
-      breakpoint()
-      final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=aux, length=gen_length)
-      return final_state, outputs
+      # global gBreak
+      # gBreak = True
+      # breakpoint()
+      # logits, presents = self.model(self.cx, context[:, -1:], past=initial_state)
+      # breakpoint()
+      #final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=aux, length=gen_length)
+      final_state, outputs = scan(generate_scan_fn, initial_state, xs=None, length=gen_length)
+      return final_state, outputs[None, ...]
 
     # breakpoint()
     # generate_fn = hk.transform(generate_sample).apply
@@ -387,9 +479,10 @@ if __name__ == '__main__':
   per_replica_batch = config["per_replica_batch"]
   total_batch = per_replica_batch * jax.device_count() // cores_per_replica
 
-  while True:
-    context = input("Type input:")
-    tokens = tokenizer.encode(context)
+  for i in range(8):
+    # prompt = input("Type input:")
+    prompt = "Hello, my name is"
+    tokens = tokenizer.encode(prompt)
 
     start = time.time()
 
@@ -400,13 +493,12 @@ if __name__ == '__main__':
     batched_tokens = np.array([padded_tokens] * total_batch)
     length = np.ones(total_batch, dtype=np.uint32) * len(tokens)
 
-    output = network.generate(batched_tokens, length, 512, {#"top_p": np.ones(total_batch) * 0.9,
-                                                            "temp": np.ones(total_batch) * 0.75})
-
-    for idx, o in enumerate(output[1][0][:, :, 0]):
-        print(f"sample {idx}: {repr(tokenizer.decode(o))}")
+    output = network.generate(batched_tokens, length, 16, {#"top_p": np.ones(total_batch) * 0.9,
+                                                           "temp": np.ones(total_batch) * 0.75})
 
     print(f"completion done in {time.time() - start:06}s")
+    completion = prompt + tokenizer.decode(np.squeeze(output[1]))
+    print(repr(completion))
 
 
 
