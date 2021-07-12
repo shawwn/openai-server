@@ -1,5 +1,7 @@
 import jax
-from jax import mask, jit
+from jax import mask, jit, pmap, tree_util
+from jax.experimental import PartitionSpec as P
+from jax.experimental.pjit import pjit, pjit_p, with_sharding_constraint, SpecSync
 import jax.numpy as jnp
 from jax.experimental import maps, stax
 import haiku as hk
@@ -22,7 +24,7 @@ gBreak2 = False
 def load_tensor(reader, name: str) -> np.array:
   #name = '.'.join(name.split('/')[1:])
   value = reader.get_tensor(name)
-  value = jnp.array(value)
+  # value = jnp.array(value)
   #key = '.'.join(name.split('/'))
   key = name
   # if value.shape and value.shape[0] == 1:
@@ -64,11 +66,24 @@ def load(config):
 def create_root_context(prefix='model'):
     return VariableContext({}, prefix=prefix)
 
+@tree_util.register_pytree_node_class
 class VariableContext(object):
     def __init__(self, name2val, prefix, allow_new=True):
         self.name2val = name2val
         self.prefix = prefix
         self.allow_new = allow_new
+    def tree_flatten(self):
+        return ((self.name2val, self.prefix), self.allow_new)
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children, allow_new=aux_data)
+    def __eq__(self, other):
+        return type(self) is type(other) and (self.name2val, self.prefix) == (other.name2val, other.prefix)
+    def __repr__(self):
+        if self.allow_new:
+            return "VariableContext(prefix={})".format(self.prefix)
+        else:
+            return "VariableContext(prefix={}, allow_new=False)".format(self.prefix)
     def scope(self, name):
         return VariableContext(self.name2val, 
             self._join(self.prefix, name), self.allow_new)
@@ -453,11 +468,132 @@ def softmax_sample(key, logits, _, temp=1):
     return jax.random.categorical(key, logits/temp, -1).astype(jnp.uint32), None
 
 
+def bucket_jit(f):
+    compiled_f = jit(mask(f, ['n'], ''))
+    def wrapped(x):
+        amount = 128 - x.shape[0] % 128
+        padded_x = jnp.pad(x, (0, amount))
+        return compiled_f([padded_x], dict(n=x.shape[0]))
+    return wrapped
+
+
+@bucket_jit
+def foo(x):
+    print("recompiling!", x)  # actually retracing, but effectively correct
+    return jnp.sum(x)
+
+
+# foo(np.arange(4))  # recompiling!
+# foo(np.arange(5))
+# foo(np.arange(6))
+# foo(np.arange(300))  # recompiling!
+
+
+# https://jax.readthedocs.io/en/latest/jax.html#jax.jit
+
+@partial(pmap, axis_name='rows')
+@partial(pmap, axis_name='cols')
+def normalize(x):
+    row_normed = x / jax.lax.psum(x, 'rows')
+    col_normed = x / jax.lax.psum(x, 'cols')
+    doubly_normed = x / jax.lax.psum(x, ('rows', 'cols'))
+    return row_normed, col_normed, doubly_normed
+
+# >>> x = jnp.arange(8.).reshape((4, 2))
+# >>> row_normed, col_normed, doubly_normed = normalize(x)
+# >>> print(row_normed.sum(0))
+# [ 1.  1.]
+# >>> print(col_normed.sum(1))
+# [ 1.  1.  1.  1.]
+# >>> print(doubly_normed.sum((0, 1)))
+
+def test_pjit():
+  f = partial(pjit, in_axis_resources=(P('dp'), P('dp')), out_axis_resources=None)(lambda x, y: x + y)
+  shape = (8, 8)
+  x = jnp.arange(np.prod(shape), dtype=jnp.float32).reshape(shape)
+  actual = f(x, x + 1)
+  expected = x + (x + 1)
+  assert len(actual.device_buffers) == 8
+  # self.assertAllClose(actual, expected, check_dtypes=False)
+  # self.assertIsInstance(actual, pxla.ShardedDeviceArray)
+  # self.assertLen(actual.device_buffers, 2)
+  # self.assertAllClose(actual.device_buffers[0].to_py(), expected,
+  #                     check_dtypes=False)
+
+
+def test_basic2d():
+    # @partial(pjit,
+    #          in_axis_resources=(P(None, 'x', 'y'), P('y')),
+    #          out_axis_resources=P('x'))
+    # def f(x, y):
+    #   return x @ y
+    @partial(pjit,
+             in_axis_resources=(P(None, 'dp', 'mp'), P('mp')),
+             out_axis_resources=P('dp'))
+    def f(x, y):
+      return x @ y
+
+    # x_shape = (8, 6, 4)
+    # y_shape = (4, 2)
+    dp_size = 1
+    mp_size = 8
+    x_shape = (8, dp_size, mp_size)
+    y_shape = (mp_size, 2)
+    x = jnp.arange(np.prod(x_shape)).reshape(x_shape)
+    y = jnp.arange(np.prod(y_shape)).reshape(y_shape)
+    actual = f(x, y)
+    expected = x @ y
+    self.assertAllClose(actual, expected, check_dtypes=False)
+    self.assertIsInstance(actual, pxla.ShardedDeviceArray)
+    self.assertLen(actual.device_buffers, 4)
+
+
+
+def test_sharding_constraint():
+  @jtu.with_mesh([('x', 2), ('y', 1)])
+  def testShardingConstraintPyTree(self):
+    @partial(pjit, in_axis_resources=None, out_axis_resources=None)
+    def f(x):
+      x = with_sharding_constraint(x, [P('x', 'y'), P('y', 'x')])
+      x = x.copy()
+      x[0]["a"] *= 2
+      return x
+
+    shape = (8, 8)
+    v = np.arange(prod(shape)).reshape(shape)
+    x = [{"a": v, "b": v * 2}, v * 3]
+    actual = f(x)
+
+    expected = x.copy()
+    expected[0]["a"] *= 2
+    self.assertAllClose(actual, expected, check_dtypes=False)
+    self.assertLen(actual[0]["a"].device_buffers, 2)
+
+    hlo = jax.xla_computation(f)(x)
+    # Annotations from with_sharding_constraint
+    self.assertIn("sharding={devices=[2,1]0,1}", hlo.as_hlo_text())
+    self.assertIn("sharding={devices=[1,2]0,1}", hlo.as_hlo_text())
+    # Annotation from pjit
+    self.assertIn("sharding={replicated}", hlo.as_hlo_text())
+
+  @partial(pjit, in_axis_resources=None, out_axis_resources=None)
+  def f(x):
+    x = with_sharding_constraint(x, [P('dp', 'mp'), P('mp', 'dp')])
+    x = x.copy()
+    x[0]["a"] *= 2
+    return x
+
+  shape = (1, 8)
+  v = np.arange(np.prod(shape)).reshape(shape)
+  x = [{"a": v, "b": v * 2}, v * 3]
+  actual = f(x)
+
+
 if __name__ == '__main__':
   np.random.seed(0)
   config = {
       'model_name': '117M',
-      'cores_per_replica': 1,
+      'cores_per_replica': jax.device_count(), #1,
       'seq': 1024,
       'n_vocab': 50257,
       'n_heads': 12,
@@ -480,6 +616,10 @@ if __name__ == '__main__':
     network = load(config)
 
     network.cx.name2val = network.params
+
+    # xs, tree = tree_util.tree_flatten(network.cx)
+    # actual = tree_util.tree_unflatten(tree, xs)
+
     tf_model.tf.get_variable = get_variable
     X_bt = np.zeros((1, 1024), dtype=jnp.int32)
     Y_bt = np.zeros((1, 1024), dtype=jnp.int32)
