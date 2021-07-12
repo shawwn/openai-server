@@ -161,6 +161,7 @@ def attn(x, scope, n_state, *, past, hparams):
         c = conv1d(x, 'c_attn', n_state*3)
         q, k, v = map(split_heads, tf.split(c, 3, axis=2))
         present = tf.stack([k, v], axis=1)
+        #breakpoint()
         if past is not None:
             pk, pv = tf.unstack(past, axis=1)
             k = tf.concat([pk, k], axis=-2)

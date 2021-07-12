@@ -1,14 +1,18 @@
 import jax
 import jax.numpy as jnp
 from jax.experimental import maps, stax
+import haiku as hk
 import numpy as np
 import os
 from pprint import pprint as pp
 
 from src import model as tf_model
+from src import encoder
+
 import json
 import functools
 import time
+import random
 
 def load_tensor(reader, name: str) -> np.array:
   #name = '.'.join(name.split('/')[1:])
@@ -144,20 +148,36 @@ def dense(cx, X_btk, F):
     Y_bt_f = np.matmul(X_bt_k, W_kf) + b_f
     return np.reshape(Y_bt_f, (B, T, F))
 
-def attn(cx, X_btk, n_state, n_head):
+def unstack(a, axis=0):
+    return [np.squeeze(e, axis) for e in np.split(a, a.shape[axis], axis = axis)]
+
+def attn(cx, X_btk, n_state, n_head, past=None):
     B, T, _K = X_btk.shape
     assert n_state % n_head==0
     QKV_b_t_3s = dense(cx.scope('c_attn'), X_btk, n_state * 3)
     QKV_b_t_3h_r = np.reshape(QKV_b_t_3s, (B, T, 3 * n_head, n_state // n_head))
     Q_bthr, K_bthr, V_bthr = np.split(QKV_b_t_3h_r, 3, axis=2)
+    present = np.stack([K_bthr, V_bthr], axis=1)
+    # breakpoint()
+    # (Pdb) present.shape
+    # (1, 2, 1024, 12, 64)
+    # (Pdb) K_bthr.shape
+    # (1, 1024, 12, 64)
+    # (Pdb) V_bthr.shape
+    # (1, 1024, 12, 64)
+    if past is not None:
+        #breakpoint()
+        pk, pv = unstack(past, axis=1)
+        K_bthr = np.concatenate([pk, K_bthr], axis=-3)
+        V_bthr = np.concatenate([pv, V_bthr], axis=-3)
     Q_bhtr = np.transpose(Q_bthr, (0, 2, 1, 3))
     V_bhtr = np.transpose(V_bthr, (0, 2, 1, 3))
     K_bhrt = np.transpose(K_bthr, (0, 2, 3, 1))
     A_bhtr = _attn(Q_bhtr, K_bhrt, V_bhtr)
     A_bthr = np.transpose(A_bhtr, (0, 2, 1, 3))
-    A_bts = np.reshape(A_bthr, (B, T, n_state))
+    A_bts = np.reshape(A_bthr, (B, -1, n_state))
     P_bts = dense(cx.scope('c_proj'), A_bts, n_state)
-    return P_bts
+    return P_bts, present
 
 def mlp(cx, X_bts, *, n_hid):
     S = X_bts.shape[-1]
@@ -165,15 +185,15 @@ def mlp(cx, X_bts, *, n_hid):
     Y_bts = dense(cx.scope('c_proj'), H_bth, S)
     return Y_bts
 
-def block(cx, x, *, n_head):
+def block(cx, x, *, n_head, past=None):
     S = x.shape[-1]
-    a = attn(cx.scope('attn'), norm(cx.scope('ln_1'), x), S, n_head)
+    a, present = attn(cx.scope('attn'), norm(cx.scope('ln_1'), x), S, n_head, past=past)
     x = x + a
     m = mlp(cx.scope('mlp'), norm(cx.scope('ln_2'), x), n_hid=S * 4)
     x = x + m
-    return x
+    return x, present
 
-def transformer(cx, tok_bt, *, n_vocab, n_head, n_layer, n_ctx, n_embd):
+def transformer(cx, tok_bt, *, n_vocab, n_head, n_layer, n_ctx, n_embd, past=None):
     B, T = tok_bt.shape
     pos_bt = jax.lax.broadcasted_iota(np.int32, (B, T), 1)
     tokenembs_qe = cx.get_variable('wte', initializer=lambda : normc(n_vocab, n_embd) * 0.1)
@@ -184,13 +204,19 @@ def transformer(cx, tok_bt, *, n_vocab, n_head, n_layer, n_ctx, n_embd):
     last_bts = tokenemb_bte + posemb_bte
     if len(last_bts.shape) < 3:
         last_bts = last_bts[np.newaxis, ...]
+    presents = []
+    pasts = unstack(past, axis=1) if past is not None else [None] * n_layer
+    prev_bts = None
     for layer in range(n_layer):
-        #last_bts = block(cx.scope(f'h{layer:02d}'), last_bts, n_head=n_head)
-        last_bts = block(cx.scope(f'h{layer:d}'), last_bts, n_head=n_head)
+        prev_bts = last_bts
+        last_bts, present = block(cx.scope(f'h{layer:d}'), last_bts, n_head=n_head, past=pasts[layer])
+        presents.append(present)
     last_bts = norm(cx.scope('ln_f'), last_bts, axis=-1)
     logits_btq = np.matmul(last_bts, tokenembs_qe.T)
     logprobs_btq = stax.logsoftmax(logits_btq)    
-    return logprobs_btq
+    # breakpoint()
+    presents = np.stack(presents, axis=1)
+    return logprobs_btq, presents
 
 
 class TransformerV3:
@@ -220,30 +246,30 @@ class TransformerV3:
     self.state = self.cx.variables_list()
 
 
-  def loss(self, XY_bt):
+  def loss(self, XY_bt, past=None):
     X_bt = XY_bt[:, :-1]
     B, T = X_bt.shape
     Y_bt = XY_bt[:, 1:]
-    logprobs_btq = self.model(self.cx, X_bt)
+    logprobs_btq, presents = self.model(self.cx, X_bt, past=past)
     loglosses_bt = - logprobs_btq.reshape((B*T, -1))[ np.arange(B*T), Y_bt.reshape((-1,))]
-    return loglosses_bt.mean()
+    return loglosses_bt.mean(), presents
 
 
-  def tf_loss(self, context):
+  def tf_loss(self, context, past=None):
     X_bt = context[:, :-1]
     B, T = X_bt.shape
     Y_bt = context[:, 1:]
-    output = tf_model.model(self.hparams, tf.convert_to_tensor(X_bt))
+    output = tf_model.model(self.hparams, tf.convert_to_tensor(X_bt), past=past)
     loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=context[:, 1:],
         logits=output['logits'])
-    return tf.reduce_mean(loss)
+    return tf.reduce_mean(loss), output['present']
     #loglosses_bt = - logprobs_btq.reshape((B*T, -1))[ np.arange(B*T), Y_bt.reshape((-1,))]
     #return loglosses_bt.mean()
 
-  def eval_xmap(self, state, obs, target, ctx_length, use_tf=False):
+  def eval_xmap(self, state, obs, target, ctx_length, use_tf=False, past=None):
     XY_bt = jnp.concatenate([obs, target[:, -1:]], axis=-1)
-    return (self.tf_loss if use_tf else self.loss)(XY_bt)
+    return (self.tf_loss if use_tf else self.loss)(XY_bt, past=past)
 
   def eval(self, sample, use_tf=False):
     print("eval sample", sample["obs"].shape)
@@ -256,12 +282,71 @@ class TransformerV3:
     else:
         ctx_length = np.array([len(sample["obs"][0])] * len(sample["obs"]))
 
-    out = self.eval_xmap(self.state, sample["obs"], sample["target"], ctx_length, use_tf=use_tf)
+    out, presents = self.eval_xmap(self.state, sample["obs"], sample["target"], ctx_length, use_tf=use_tf)
     print(f"eval dispatched in {time.time() - start:.06}s")
 
     # np.array(out["loss"])
     print(f"eval done in {time.time() - start:.06}s")
     return out
+
+  def generate_initial(self, context, ctx_length):
+    count = ctx_length[-1]
+    assert (ctx_length == count).all()
+    initial_context = context[:, context.shape[-1] - count:]
+    logits, presents = self.model(self.cx, initial_context)
+    return logits, presents
+
+  def generate_once(self, next_token, decode_state):
+    breakpoint()
+    pass
+
+  def generate_xmap(self, state, key, ctx, ctx_length, aux, sampler_options):
+    sampler = config["sampler"]
+    gen_length = self.gen_length
+
+    def generate_sample(context, ctx_length, aux):
+      _, initial_state = self.generate_initial(context, ctx_length)
+
+      def generate_scan_fn(carry, sampler_input):
+        next_token, decode_state, sample_key = carry
+        sample_key, new_key = jax.random.split(sample_key)
+
+        output, new_state = self.generate_once(next_token, decode_state)
+        next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
+
+        output = (next_token, sample_info)
+        new_carry = (next_token, new_state, new_key)
+        return new_carry, output
+
+      logits, presents = self.model(self.cx, context[:, -1:], past=initial_state)
+      breakpoint()
+      final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=aux, length=gen_length)
+      return final_state, outputs
+
+    # breakpoint()
+    # generate_fn = hk.transform(generate_sample).apply
+    # return generate_fn(state["params"], key, ctx, ctx_length, aux)
+    return generate_sample(ctx, ctx_length, aux)
+
+
+  def generate(self, ctx, ctx_length, gen_length, sampler_options):
+    key = hk.PRNGSequence(random.randint(0, 2 ** 60))
+
+    batch_size = ctx.shape[0]
+    aux = jnp.zeros((batch_size, gen_length), dtype=jnp.uint32)
+    self.gen_length = gen_length
+
+    return self.generate_xmap(self.state,
+                              jnp.array(key.take(batch_size)),
+                              ctx,
+                              np.array(ctx_length, dtype=np.uint32),
+                              aux,
+                              sampler_options)
+  
+
+# takes in a logit distribution, softmax and then sample
+def softmax_sample(key, logits, _, temp=1):
+    return jax.random.categorical(key, logits/temp, -1).astype(jnp.uint32), None
 
 
 if __name__ == '__main__':
@@ -276,7 +361,11 @@ if __name__ == '__main__':
       'd_model': 768,
       'pe': 'fixed',
       # 'sampler': sampling.nucleaus_sample,
+      'sampler': softmax_sample,
+      'per_replica_batch': 1,
       }
+
+  tokenizer = encoder.get_encoder(config['model_name'])
 
   cores_per_replica = config['cores_per_replica']
   mesh_shape = (jax.device_count() // cores_per_replica, cores_per_replica)
@@ -294,5 +383,30 @@ if __name__ == '__main__':
   tf_loss = network.eval({ 'obs': X_bt, 'target': Y_bt, }, use_tf=True)
   print(jx_loss, tf_loss.numpy())
   self = network
-  
+
+  per_replica_batch = config["per_replica_batch"]
+  total_batch = per_replica_batch * jax.device_count() // cores_per_replica
+
+  while True:
+    context = input("Type input:")
+    tokens = tokenizer.encode(context)
+
+    start = time.time()
+
+    provided_ctx = len(tokens)
+    pad_amount = config['seq'] - provided_ctx
+
+    padded_tokens = np.pad(tokens, ((pad_amount, 0),)).astype(np.uint32)
+    batched_tokens = np.array([padded_tokens] * total_batch)
+    length = np.ones(total_batch, dtype=np.uint32) * len(tokens)
+
+    output = network.generate(batched_tokens, length, 512, {#"top_p": np.ones(total_batch) * 0.9,
+                                                            "temp": np.ones(total_batch) * 0.75})
+
+    for idx, o in enumerate(output[1][0][:, :, 0]):
+        print(f"sample {idx}: {repr(tokenizer.decode(o))}")
+
+    print(f"completion done in {time.time() - start:06}s")
+
+
 
