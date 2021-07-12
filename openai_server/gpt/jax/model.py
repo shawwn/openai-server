@@ -181,6 +181,12 @@ def attn(cx, X_btk, n_state, n_head, past=None):
     #     pk, pv = unstack(past, axis=1)
     #     K_bthr = np.concatenate([pk, K_bthr], axis=-3)
     #     V_bthr = np.concatenate([pv, V_bthr], axis=-3)
+    # (Pdb) present.shape
+    # (1, 2, 1024, 12, 64)
+    # (Pdb) K_bthr.shape
+    # (1, 1024, 12, 64)
+    # (Pdb) V_bthr.shape
+    # (1, 1024, 12, 64)
     Q_bhtr = np.transpose(Q_bthr, (0, 2, 1, 3))
     K_bhrt = np.transpose(K_bthr, (0, 2, 3, 1))
     V_bhtr = np.transpose(V_bthr, (0, 2, 1, 3))
@@ -192,13 +198,6 @@ def attn(cx, X_btk, n_state, n_head, past=None):
         K_bhrt = np.concatenate([pk, K_bhrt], axis=-1)
         V_bhtr = np.concatenate([pv, V_bhtr], axis=-2)
     present = [K_bhrt, V_bhtr]
-    # breakpoint()
-    # (Pdb) present.shape
-    # (1, 2, 1024, 12, 64)
-    # (Pdb) K_bthr.shape
-    # (1, 1024, 12, 64)
-    # (Pdb) V_bthr.shape
-    # (1, 1024, 12, 64)
     global gBreak
     if gBreak:
       gBreak = False
@@ -397,7 +396,6 @@ class TransformerV3:
         next_token, decode_state, sample_key = carry
         sample_key, new_key = jax.random.split(sample_key)
 
-        # breakpoint()
         output, new_state = self.generate_once(next_token, decode_state)
         next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
 
@@ -406,16 +404,10 @@ class TransformerV3:
         new_carry = (next_token, new_state, new_key)
         return new_carry, output
 
-      # global gBreak
-      # gBreak = True
-      # breakpoint()
-      # logits, presents = self.model(self.cx, context[:, -1:], past=initial_state)
-      # breakpoint()
       #final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=aux, length=gen_length)
       final_state, outputs = scan(generate_scan_fn, initial_state, xs=None, length=gen_length)
       return final_state, outputs[None, ...]
 
-    # breakpoint()
     # generate_fn = hk.transform(generate_sample).apply
     # return generate_fn(state["params"], key, ctx, ctx_length, aux)
     return generate_sample(ctx, ctx_length, aux)
