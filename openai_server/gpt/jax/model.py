@@ -110,8 +110,10 @@ def normc(*shape):
 def randn(shape, stddev):
     return np.random.randn(*shape).astype(np.float32) * stddev
 
-def gelu(x):
-    return 0.5*x*(1+np.tanh(0.79788*(x+0.044715*x**3)))
+# def gelu(x):
+#     return 0.5*x*(1+np.tanh(0.79788*(x+0.044715*x**3)))
+
+from jax.nn import gelu
 
 def _norm(x, *, axis, g=None, b=None, e=1e-5):
     u = np.mean(x, axis=axis, keepdims=True)
