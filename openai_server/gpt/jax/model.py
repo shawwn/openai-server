@@ -73,10 +73,10 @@ class VariableContext(object):
         self.prefix = prefix
         self.allow_new = allow_new
     def tree_flatten(self):
-        return ((self.name2val, self.prefix), self.allow_new)
+        return ((self.name2val,), {'prefix': self.prefix, 'allow_new': self.allow_new})
     @classmethod
     def tree_unflatten(cls, aux_data, children):
-        return cls(*children, allow_new=aux_data)
+        return cls(*children, **aux_data)
     def __eq__(self, other):
         return type(self) is type(other) and (self.name2val, self.prefix) == (other.name2val, other.prefix)
     def __repr__(self):
