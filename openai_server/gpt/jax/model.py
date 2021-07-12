@@ -11,6 +11,7 @@ from src import encoder
 
 import json
 import functools
+from functools import partial
 import time
 import random
 
@@ -20,6 +21,7 @@ gBreak2 = False
 def load_tensor(reader, name: str) -> np.array:
   #name = '.'.join(name.split('/')[1:])
   value = reader.get_tensor(name)
+  # value = jnp.array(value)
   #key = '.'.join(name.split('/'))
   key = name
   # if value.shape and value.shape[0] == 1:
@@ -78,6 +80,7 @@ class VariableContext(object):
             assert self.allow_new
             val = initializer()
             assert type(val) == np.ndarray and val.dtype == np.float32
+            # val = jnp.array(val)
             self.name2val[name] = val
 
         return self.name2val[name]
@@ -115,52 +118,64 @@ def randn(shape, stddev):
 
 from jax.nn import gelu
 
-def _norm(x, *, axis, g=None, b=None, e=1e-5):
-    u = np.mean(x, axis=axis, keepdims=True)
-    s = np.mean(np.square(x-u), axis=axis, keepdims=True)
-    x = (x - u) / np.sqrt(s + e)
+@jax.jit
+def _norm(x, g, b, e=1e-5):
+    axis = -1
+    u = jnp.mean(x, axis=axis, keepdims=True)
+    s = jnp.mean(jnp.square(x-u), axis=axis, keepdims=True)
+    x = (x - u) / jnp.sqrt(s + e)
     assert g is not None and b is not None
-    if g is not None and b is not None:
-        x = x * g + b
+    x = x * g + b
     return x
 
-def norm(cx, x, axis=-1):
+# @partial(jax.jit, static_argnames=['cx'])
+def norm(cx, x):
+    axis = -1
     n_state = x.shape[axis]
     g = cx.get_variable("g", initializer=lambda : np.ones(n_state, 'f'))
     b = cx.get_variable("b", initializer=lambda : np.zeros(n_state, 'f'))
-    return _norm(x, g=g, b=b, axis=axis)
+    return _norm(x, g, b)
 
+@partial(jax.jit, static_argnames=['nd', 'ns', 'dtype'])
 def attention_mask(nd, ns, *, dtype):
-    i = np.arange(nd)[:,None]
-    j = np.arange(ns)
+    i = jnp.arange(nd)[:,None]
+    j = jnp.arange(ns)
     m = i >= j - ns + nd
     return m.astype(dtype)
 
+@jax.jit
 def mask_attn_weights(w):
     *_, nd, ns = w.shape
     b = attention_mask(nd, ns, dtype=w.dtype)
-    b = np.reshape(b, (1, 1, nd, ns))
-    w = w * b - np.array(1e9, dtype=w.dtype) * (1 - b)
+    b = jnp.reshape(b, (1, 1, nd, ns))
+    w = w * b - jnp.array(1e9, dtype=w.dtype) * (1 - b)
     return w
 
+@jax.jit
 def _attn(Q_bhtr, K_bhrt, V_bhtr):
     R = Q_bhtr.shape[-1]
-    W_bhtt = np.matmul(Q_bhtr, K_bhrt) / np.sqrt(R)
+    W_bhtt = jnp.matmul(Q_bhtr, K_bhrt) / jnp.sqrt(R)
     W_bhtt = mask_attn_weights(W_bhtt)
     W_bhtt = stax.softmax(W_bhtt, axis=-1)
-    A_bhtr = np.matmul(W_bhtt, V_bhtr)
+    A_bhtr = jnp.matmul(W_bhtt, V_bhtr)
     return A_bhtr
+
+@partial(jax.jit, static_argnames=['F'])
+def _dense(X_btk, W_kf, b_f, F):
+    B, T, K = X_btk.shape
+    X_bt_k = jnp.reshape(X_btk, (-1, K))
+    Y_bt_f = jnp.matmul(X_bt_k, W_kf) + b_f
+    return jnp.reshape(Y_bt_f, (B, T, F))
 
 def dense(cx, X_btk, F):
     B, T, K = X_btk.shape
-    X_bt_k = np.reshape(X_btk, (-1, K))
-    W_kf = cx.get_variable("w", initializer=lambda : normc(K, F))
-    b_f = cx.get_variable("b", initializer=lambda : np.zeros(F,'f'))
-    Y_bt_f = np.matmul(X_bt_k, W_kf) + b_f
-    return np.reshape(Y_bt_f, (B, T, F))
+    W_kf = cx.get_variable("w", initializer=lambda: normc(K, F))
+    b_f = cx.get_variable("b", initializer=lambda: np.zeros(F,'f'))
+    return _dense(X_btk, W_kf, b_f, F)
 
+@partial(jax.jit, static_argnames=['axis'])
 def unstack(a, axis=0):
-    return [np.squeeze(e, axis) for e in np.split(a, a.shape[axis], axis = axis)]
+    return [jnp.squeeze(e, axis) for e in jnp.split(a, a.shape[axis], axis = axis)]
 
 def past_length(past):
   if past is None:
@@ -176,29 +191,29 @@ def attn(cx, X_btk, n_state, n_head, past=None):
     B, T, _K = X_btk.shape
     assert n_state % n_head==0
     QKV_b_t_3s = dense(cx.scope('c_attn'), X_btk, n_state * 3)
-    QKV_b_t_3h_r = np.reshape(QKV_b_t_3s, (B, T, 3 * n_head, n_state // n_head))
-    Q_bthr, K_bthr, V_bthr = np.split(QKV_b_t_3h_r, 3, axis=2)
-    # present = np.stack([K_bthr, V_bthr], axis=1)
+    QKV_b_t_3h_r = jnp.reshape(QKV_b_t_3s, (B, T, 3 * n_head, n_state // n_head))
+    Q_bthr, K_bthr, V_bthr = jnp.split(QKV_b_t_3h_r, 3, axis=2)
+    # present = jnp.stack([K_bthr, V_bthr], axis=1)
     # if past is not None:
     #     pk, pv = unstack(past, axis=1)
-    #     K_bthr = np.concatenate([pk, K_bthr], axis=-3)
-    #     V_bthr = np.concatenate([pv, V_bthr], axis=-3)
+    #     K_bthr = jnp.concatenate([pk, K_bthr], axis=-3)
+    #     V_bthr = jnp.concatenate([pv, V_bthr], axis=-3)
     # (Pdb) present.shape
     # (1, 2, 1024, 12, 64)
     # (Pdb) K_bthr.shape
     # (1, 1024, 12, 64)
     # (Pdb) V_bthr.shape
     # (1, 1024, 12, 64)
-    Q_bhtr = np.transpose(Q_bthr, (0, 2, 1, 3))
-    K_bhrt = np.transpose(K_bthr, (0, 2, 3, 1))
-    V_bhtr = np.transpose(V_bthr, (0, 2, 1, 3))
-    #present = np.stack([K_bhrt, V_bhtr], axis=1)
+    Q_bhtr = jnp.transpose(Q_bthr, (0, 2, 1, 3))
+    K_bhrt = jnp.transpose(K_bthr, (0, 2, 3, 1))
+    V_bhtr = jnp.transpose(V_bthr, (0, 2, 1, 3))
+    #present = jnp.stack([K_bhrt, V_bhtr], axis=1)
     # present = [K_bhrt, V_bhtr]
     if past is not None:
         # pk, pv = unstack(past, axis=1)
         pk, pv = past
-        K_bhrt = np.concatenate([pk, K_bhrt], axis=-1)
-        V_bhtr = np.concatenate([pv, V_bhtr], axis=-2)
+        K_bhrt = jnp.concatenate([pk, K_bhrt], axis=-1)
+        V_bhtr = jnp.concatenate([pv, V_bhtr], axis=-2)
     present = [K_bhrt, V_bhtr]
     global gBreak
     if gBreak:
@@ -209,8 +224,8 @@ def attn(cx, X_btk, n_state, n_head, past=None):
       gBreak2 = False
       breakpoint()
     A_bhtr = _attn(Q_bhtr, K_bhrt, V_bhtr)
-    A_bthr = np.transpose(A_bhtr, (0, 2, 1, 3))
-    A_bts = np.reshape(A_bthr, (B, T, n_state))
+    A_bthr = jnp.transpose(A_bhtr, (0, 2, 1, 3))
+    A_bts = jnp.reshape(A_bthr, (B, T, n_state))
     P_bts = dense(cx.scope('c_proj'), A_bts, n_state)
     return P_bts, present
 
@@ -230,15 +245,16 @@ def block(cx, x, *, n_head, past=None):
 
 def transformer(cx, tok_bt, *, n_vocab, n_head, n_layer, n_ctx, n_embd, past=None):
     B, T = tok_bt.shape
-    pos_bt = jax.lax.broadcasted_iota(np.int32, (B, T), 1)
+    pos_bt = jax.lax.broadcasted_iota(jnp.int32, (B, T), 1)
     pos_bt = pos_bt + past_length(past)
     tokenembs_qe = cx.get_variable('wte', initializer=lambda: normc(n_vocab, n_embd) * 0.1)
     posembs_pe = cx.get_variable('wpe', initializer=lambda: normc(n_ctx, n_embd) * 0.1)
-    tokenemb_bte = tokenembs_qe[tuple(tok_bt)]
+    #tokenemb_bte = tokenembs_qe[tuple(tok_bt)]
+    tokenemb_bte = tokenembs_qe[tok_bt]
     posemb_bte = posembs_pe[pos_bt]
     last_bts = tokenemb_bte + posemb_bte
     if len(last_bts.shape) < 3:
-        last_bts = last_bts[np.newaxis, ...]
+        last_bts = last_bts[jnp.newaxis, ...]
     presents = []
     #pasts = unstack(past, axis=1) if past is not None else [None] * n_layer
     pasts = past if past is not None else [None] * n_layer
@@ -247,8 +263,9 @@ def transformer(cx, tok_bt, *, n_vocab, n_head, n_layer, n_ctx, n_embd, past=Non
         prev_bts = last_bts
         last_bts, present = block(cx.scope(f'h{layer:d}'), last_bts, n_head=n_head, past=pasts[layer])
         presents.append(present)
-    last_bts = norm(cx.scope('ln_f'), last_bts, axis=-1)
+    last_bts = norm(cx.scope('ln_f'), last_bts)
     logits_btq = np.matmul(last_bts, tokenembs_qe.T)
+    # logits_btq = jnp.matmul(last_bts, tokenembs_qe.T)
     # breakpoint()
     #presents = np.stack(presents, axis=1)
     return logits_btq, presents
@@ -406,7 +423,7 @@ class TransformerV3:
         new_carry = (next_token, new_state, new_key)
         return new_carry, output
 
-      #final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=aux, length=gen_length)
+      # final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=aux[0], length=gen_length)
       final_state, outputs = scan(generate_scan_fn, initial_state, xs=None, length=gen_length)
       return final_state, outputs[None, ...]
 
@@ -456,43 +473,44 @@ if __name__ == '__main__':
   cores_per_replica = config['cores_per_replica']
   mesh_shape = (jax.device_count() // cores_per_replica, cores_per_replica)
   devices = np.array(jax.devices()).reshape(mesh_shape)
-  #maps.thread_resources.env = maps.ResourceEnv(maps.Mesh(devices, ('dp', 'mp')), ())
+  maps.thread_resources.env = maps.ResourceEnv(maps.Mesh(devices, ('dp', 'mp')), ())
 
-  network = load(config)
+  with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
+    network = load(config)
 
-  network.cx.name2val = network.params
-  tf_model.tf.get_variable = get_variable
-  X_bt = np.zeros((1, 1024), dtype=jnp.int32)
-  Y_bt = np.zeros((1, 1024), dtype=jnp.int32)
-  X = tf.convert_to_tensor(np.zeros((1, 1025), dtype=jnp.int32))
-  jx_loss = network.eval({ 'obs': X_bt, 'target': Y_bt, })
-  tf_loss = network.eval({ 'obs': X_bt, 'target': Y_bt, }, use_tf=True)
-  print(jx_loss, tf_loss.numpy())
-  self = network
+    network.cx.name2val = network.params
+    tf_model.tf.get_variable = get_variable
+    X_bt = np.zeros((1, 1024), dtype=jnp.int32)
+    Y_bt = np.zeros((1, 1024), dtype=jnp.int32)
+    X = tf.convert_to_tensor(np.zeros((1, 1025), dtype=jnp.int32))
+    jx_loss = network.eval({ 'obs': X_bt, 'target': Y_bt, })
+    tf_loss = network.eval({ 'obs': X_bt, 'target': Y_bt, }, use_tf=True)
+    print(jx_loss, tf_loss.numpy())
+    self = network
 
-  per_replica_batch = config["per_replica_batch"]
-  total_batch = per_replica_batch * jax.device_count() // cores_per_replica
+    per_replica_batch = config["per_replica_batch"]
+    total_batch = per_replica_batch * jax.device_count() // cores_per_replica
 
-  for i in range(8):
-    # prompt = input("Type input:")
-    prompt = "Hello, my name is"
-    tokens = tokenizer.encode(prompt)
+    for i in range(8):
+      # prompt = input("Type input:")
+      prompt = "Hello, my name is"
+      tokens = tokenizer.encode(prompt)
 
-    start = time.time()
+      start = time.time()
 
-    provided_ctx = len(tokens)
-    pad_amount = config['seq'] - provided_ctx
+      provided_ctx = len(tokens)
+      pad_amount = config['seq'] - provided_ctx
 
-    padded_tokens = np.pad(tokens, ((pad_amount, 0),)).astype(np.uint32)
-    batched_tokens = np.array([padded_tokens] * total_batch)
-    length = np.ones(total_batch, dtype=np.uint32) * len(tokens)
+      padded_tokens = np.pad(tokens, ((pad_amount, 0),)).astype(np.uint32)
+      batched_tokens = np.array([padded_tokens] * total_batch)
+      length = np.ones(total_batch, dtype=np.uint32) * len(tokens)
 
-    output = network.generate(batched_tokens, length, 16, {#"top_p": np.ones(total_batch) * 0.9,
-                                                           "temp": np.ones(total_batch) * 0.75})
+      output = network.generate(batched_tokens, length, 16, {#"top_p": np.ones(total_batch) * 0.9,
+                                                             "temp": np.ones(total_batch) * 0.75})
 
-    print(f"completion done in {time.time() - start:06}s")
-    completion = prompt + tokenizer.decode(np.squeeze(output[1]))
-    print(repr(completion))
+      print(f"completion done in {time.time() - start:06}s")
+      completion = prompt + tokenizer.decode(np.squeeze(output[1]))
+      print(repr(completion))
 
 
 
