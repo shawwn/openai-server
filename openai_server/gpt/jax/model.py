@@ -1,4 +1,5 @@
 import jax
+from jax import mask, jit
 import jax.numpy as jnp
 from jax.experimental import maps, stax
 import haiku as hk
@@ -21,7 +22,7 @@ gBreak2 = False
 def load_tensor(reader, name: str) -> np.array:
   #name = '.'.join(name.split('/')[1:])
   value = reader.get_tensor(name)
-  # value = jnp.array(value)
+  value = jnp.array(value)
   #key = '.'.join(name.split('/'))
   key = name
   # if value.shape and value.shape[0] == 1:
