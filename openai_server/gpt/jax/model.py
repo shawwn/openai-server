@@ -1,7 +1,7 @@
 import jax
 from jax import mask, jit, pmap, tree_util
 from jax.experimental import PartitionSpec as P
-from jax.experimental.pjit import pjit, pjit_p, with_sharding_constraint, SpecSync
+from jax.experimental.pjit import pjit, pjit_p, with_sharding_constraint
 import jax.numpy as jnp
 from jax.experimental import maps, stax
 import haiku as hk
