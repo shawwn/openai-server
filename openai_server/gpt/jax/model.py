@@ -358,7 +358,7 @@ def past_length(past):
     return KV_bthr.shape[-3]
 
 # @partial(jax.jit, static_argnames=['n_state', 'n_head'])
-def attn(cx, X_btk, past=None):
+def attn(cx, X_btk, past):
     n_head = cx.n_head
     B, T, n_state = X_btk.shape
     assert n_state % n_head==0
@@ -387,7 +387,7 @@ def mlp(cx, X_bts):
     Y_bts = dense(cx.scope('c_proj'), H_bth, S)
     return Y_bts
 
-def block(cx, x, past=None):
+def block(cx, x, past):
     a, present = attn(cx.scope('attn'), norm(cx.scope('ln_1'), x), past)
     x = x + a
     m = mlp(cx.scope('mlp'), norm(cx.scope('ln_2'), x))
