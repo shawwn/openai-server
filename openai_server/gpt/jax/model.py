@@ -322,19 +322,12 @@ def attention_mask(nd, ns, *, dtype):
 @jax.jit
 def mask_attn_weights(w):
     *_, nd, ns = w.shape
+    if nd <= 1:
+      return w
     b = attention_mask(nd, ns, dtype=w.dtype)
     b = jnp.reshape(b, (1, 1, nd, ns))
     w = w * b - jnp.array(1e9, dtype=w.dtype) * (1 - b)
     return w
-
-@jax.jit
-def _attn(Q_bhtr, K_bhrt, V_bhtr):
-    R = Q_bhtr.shape[-1]
-    W_bhtt = jnp.matmul(Q_bhtr, K_bhrt) / jnp.sqrt(R)
-    W_bhtt = mask_attn_weights(W_bhtt)
-    W_bhtt = stax.softmax(W_bhtt, axis=-1)
-    A_bhtr = jnp.matmul(W_bhtt, V_bhtr)
-    return A_bhtr
 
 @partial(jax.jit, static_argnames=['F'])
 def _dense(X_btk, W_kf, b_f, F):
@@ -358,8 +351,8 @@ def past_length(past):
   if past is None:
     return 0
   elif isinstance(past, (list, tuple)):
-    K_bhrt, V_bhtr = past[0]
-    return K_bhrt.shape[-1]
+    K_bthr, V_bthr = past[0]
+    return V_bthr.shape[-3]
   else:
     KV_bthr = past
     return KV_bthr.shape[-3]
@@ -372,38 +365,16 @@ def attn(cx, X_btk, past=None):
     QKV_b_t_3s = dense(cx.scope('c_attn'), X_btk, n_state * 3)
     QKV_b_t_3h_r = jnp.reshape(QKV_b_t_3s, (B, T, 3 * n_head, n_state // n_head))
     Q_bthr, K_bthr, V_bthr = jnp.split(QKV_b_t_3h_r, 3, axis=2)
-    # present = jnp.stack([K_bthr, V_bthr], axis=1)
-    # if past is not None:
-    #     pk, pv = unstack(past, axis=1)
-    #     K_bthr = jnp.concatenate([pk, K_bthr], axis=-3)
-    #     V_bthr = jnp.concatenate([pv, V_bthr], axis=-3)
-    # (Pdb) present.shape
-    # (1, 2, 1024, 12, 64)
-    # (Pdb) K_bthr.shape
-    # (1, 1024, 12, 64)
-    # (Pdb) V_bthr.shape
-    # (1, 1024, 12, 64)
-    Q_bhtr = jnp.transpose(Q_bthr, (0, 2, 1, 3))
-    K_bhrt = jnp.transpose(K_bthr, (0, 2, 3, 1))
-    V_bhtr = jnp.transpose(V_bthr, (0, 2, 1, 3))
-    #present = jnp.stack([K_bhrt, V_bhtr], axis=1)
-    # present = [K_bhrt, V_bhtr]
     if past is not None:
-        # pk, pv = unstack(past, axis=1)
         pk, pv = past
-        K_bhrt = jnp.concatenate([pk, K_bhrt], axis=-1)
-        V_bhtr = jnp.concatenate([pv, V_bhtr], axis=-2)
-    present = [K_bhrt, V_bhtr]
-    global gBreak
-    if gBreak:
-      gBreak = False
-      breakpoint()
-    global gBreak2
-    if gBreak2 and past is not None:
-      gBreak2 = False
-      breakpoint()
-    A_bhtr = _attn(Q_bhtr, K_bhrt, V_bhtr)
-    A_bthr = jnp.transpose(A_bhtr, (0, 2, 1, 3))
+        K_bthr = jnp.concatenate([pk, K_bthr], axis=-3)
+        V_bthr = jnp.concatenate([pv, V_bthr], axis=-3)
+    present = [K_bthr, V_bthr]
+    R = Q_bthr.shape[-1]
+    W_bhtt = jnp.einsum("bthr,bThr->bhtT", Q_bthr, K_bthr) / jnp.sqrt(R)
+    W_bhtt = mask_attn_weights(W_bhtt)
+    W_bhtt = stax.softmax(W_bhtt, axis=-1)
+    A_bthr = jnp.einsum("bhtT,bThr->bthr", W_bhtt, V_bthr)
     A_bts = jnp.reshape(A_bthr, (B, T, n_state))
     P_bts = dense(cx.scope('c_proj'), A_bts, n_state)
     return P_bts, present
@@ -423,10 +394,12 @@ def block(cx, x, *, past=None):
     x = x + m
     return x, present
 
-def transformer(cx, tok_bt, *, past=None):
+def transformer(cx, tok_bt, *, past=None, past_len=None):
     B, T = tok_bt.shape
     pos_bt = jax.lax.broadcasted_iota(jnp.int32, (B, T), 1)
-    pos_bt = pos_bt + past_length(past)
+    if past_len is None:
+      past_len = past_length(past)
+    pos_bt = pos_bt + past_len
     tokenembs_qe = cx.get_variable('wte', initializer=lambda: normc(cx.n_vocab, cx.n_embd) * 0.1)
     posembs_pe = cx.get_variable('wpe', initializer=lambda: normc(cx.n_ctx, cx.n_embd) * 0.1)
     #tokenemb_bte = tokenembs_qe[tuple(tok_bt)]
@@ -560,20 +533,15 @@ class TransformerV3:
     count = ctx_length[-1]
     assert (ctx_length == count).all()
     initial_context = context[..., context.shape[-1] - count:-1]
-    last = context[..., -1:]
+    iniital_token = context[..., -1:]
     logits, presents = self.model(self.cx, initial_context)
-    # return logits, presents
     initial_logits = logits[..., -1, :]
     initial_presents = presents
-    return initial_logits, (last, initial_presents, key)
+    initial_len = past_length(initial_presents)
+    return initial_logits, (iniital_token, initial_presents, initial_len, key)
 
-  def generate_once(self, next_token, decode_state):
-    logits, presents = self.model(self.cx, next_token, past=decode_state)
-    #assert logits.shape[-2] == 1
-    #next_logits = logits[..., -1, :]
-    next_logits = logits
-    # next_presents = np.concatenate([decode_state, presents], axis=-3)
-    next_presents = presents
+  def generate_once(self, next_token, decode_state, decode_len):
+    next_logits, next_presents = self.model(self.cx, next_token, past=decode_state, past_len=decode_len)
     return next_logits, next_presents
 
   def generate_xmap(self, state, key, ctx, ctx_length, aux, sampler_options):
@@ -581,23 +549,20 @@ class TransformerV3:
     gen_length = self.gen_length
 
     def generate_sample(context, ctx_length, aux):
-      # initial_logits, initial_presents = self.generate_initial(context, ctx_length)
-      # initial_state = [context[:, -1], initial_presents, key[0]]
       _, initial_state = self.generate_initial(context, ctx_length, key=key[0])
 
       def generate_scan_fn(carry, sampler_input):
-        next_token, decode_state, sample_key = carry
+        next_token, decode_state, decode_len, sample_key = carry
         sample_key, new_key = jax.random.split(sample_key)
 
-        output, new_state = self.generate_once(next_token, decode_state)
+        output, new_state = self.generate_once(next_token, decode_state, decode_len)
         next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
 
-        #output = (next_token, sample_info)
         output = next_token
-        new_carry = (next_token, new_state, new_key)
+        new_carry = (next_token, new_state, decode_len + 1, new_key)
         return new_carry, output
 
-      # final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=aux[0], length=gen_length)
+      # final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=aux, length=gen_length)
       final_state, outputs = scan(generate_scan_fn, initial_state, xs=None, length=gen_length)
       return final_state, outputs[None, ...]
 
@@ -605,9 +570,10 @@ class TransformerV3:
     # return generate_fn(state["params"], key, ctx, ctx_length, aux)
     return generate_sample(ctx, ctx_length, aux)
 
-
-  def generate(self, ctx, ctx_length, gen_length, sampler_options):
-    key = hk.PRNGSequence(random.randint(0, 2 ** 60))
+  def generate(self, ctx, ctx_length, gen_length, sampler_options, seed=None):
+    if seed is None:
+      seed = random.randint(0, 2 ** 60)
+    key = hk.PRNGSequence(seed)
 
     batch_size = ctx.shape[0]
     aux = jnp.zeros((batch_size, gen_length), dtype=jnp.uint32)
@@ -810,8 +776,8 @@ if __name__ == '__main__':
       batched_tokens = np.array([padded_tokens] * total_batch)
       length = np.ones(total_batch, dtype=np.uint32) * len(tokens)
 
-      output = network.generate(batched_tokens, length, 16, {#"top_p": np.ones(total_batch) * 0.9,
-                                                             "temp": np.ones(total_batch) * 0.75})
+      output = network.generate(batched_tokens, length, 32, {#"top_p": np.ones(total_batch) * 0.9,
+                                                             "temp": np.ones(total_batch) * 0.75}, seed=i+1)
 
       print(f"completion done in {time.time() - start:06}s")
       completion = prompt + tokenizer.decode(np.squeeze(output[1]))
