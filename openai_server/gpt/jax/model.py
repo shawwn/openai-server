@@ -645,7 +645,7 @@ if __name__ == '__main__':
     per_replica_batch = config["per_replica_batch"]
     total_batch = per_replica_batch * jax.device_count() // cores_per_replica
 
-    for i in range(8):
+    for i in range(3):
       # prompt = input("Type input:")
       prompt = "Hello, my name is"
       tokens = tokenizer.encode(prompt)
