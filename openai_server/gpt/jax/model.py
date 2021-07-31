@@ -387,14 +387,15 @@ def mlp(cx, X_bts):
     Y_bts = dense(cx.scope('c_proj'), H_bth, S)
     return Y_bts
 
-def block(cx, x, *, past=None):
-    a, present = attn(cx.scope('attn'), norm(cx.scope('ln_1'), x), past=past)
+def block(cx, x, past=None):
+    a, present = attn(cx.scope('attn'), norm(cx.scope('ln_1'), x), past)
     x = x + a
     m = mlp(cx.scope('mlp'), norm(cx.scope('ln_2'), x))
     x = x + m
     return x, present
 
-def transformer(cx, tok_bt, *, past=None, past_len=None):
+
+def transformer(cx, tok_bt, past=None, past_len=None):
     B, T = tok_bt.shape
     pos_bt = jax.lax.broadcasted_iota(jnp.int32, (B, T), 1)
     if past_len is None:
@@ -411,16 +412,11 @@ def transformer(cx, tok_bt, *, past=None, past_len=None):
     presents = []
     #pasts = unstack(past, axis=1) if past is not None else [None] * cx.n_layer
     pasts = past if past is not None else [None] * cx.n_layer
-    prev_bts = None
     for layer in range(cx.n_layer):
-        prev_bts = last_bts
-        last_bts, present = block(cx.scope(f'h{layer:d}'), last_bts, past=pasts[layer])
+        last_bts, present = block(cx.scope(f'h{layer:d}'), last_bts, pasts[layer])
         presents.append(present)
     last_bts = norm(cx.scope('ln_f'), last_bts)
-    logits_btq = np.matmul(last_bts, tokenembs_qe.T)
-    # logits_btq = jnp.matmul(last_bts, tokenembs_qe.T)
-    # breakpoint()
-    #presents = np.stack(presents, axis=1)
+    logits_btq = jnp.matmul(last_bts, tokenembs_qe.T)
     return logits_btq, presents
 
 def scan(f, init, xs, length=None):
@@ -455,7 +451,7 @@ class TransformerV3:
     X_bt = XY_bt[:, :-1]
     B, T = X_bt.shape
     Y_bt = XY_bt[:, 1:]
-    logits_btq, presents = self.model(self.cx, X_bt, past=past)
+    logits_btq, presents = self.model(self.cx, X_bt, past)
     logprobs_btq = stax.logsoftmax(logits_btq)
     loglosses_bt = - logprobs_btq.reshape((B*T, -1))[ np.arange(B*T), Y_bt.reshape((-1,))]
     return loglosses_bt.mean(), presents
@@ -477,8 +473,8 @@ class TransformerV3:
     #loglosses_bt = - logprobs_btq.reshape((B*T, -1))[ np.arange(B*T), Y_bt.reshape((-1,))]
     #return loglosses_bt.mean()
 
-  def generate_one_token(self, context, sample_key=None, *, past=None, **sampler_options):
-    logprobs_btq, presents = self.model(self.cx, context, past=past)
+  def generate_one_token(self, context, sample_key=None, past=None, **sampler_options):
+    logprobs_btq, presents = self.model(self.cx, context, past)
     sampler_input = None
     if sample_key is None:
       sample_key = jax.random.PRNGKey(random.randint(0, 2 ** 60))
@@ -499,7 +495,7 @@ class TransformerV3:
     context = np.array(tokenizer.encode(prompt))[None, :]
     past = None
     for i in range(length):
-      context, sample_key, presents = self.generate_one_token(context, sample_key=sample_key, past=past, temp=temp, **sampler_options)
+      context, sample_key, presents = self.generate_one_token(context, sample_key, past, temp=temp, **sampler_options)
       if past is None:
         past = presents
       else:
@@ -507,9 +503,9 @@ class TransformerV3:
       prompt += tokenizer.decode(context[0])
     return prompt
 
-  def eval_xmap(self, state, obs, target, ctx_length, use_tf=False, past=None):
+  def eval_xmap(self, state, obs, target, ctx_length, past=None, *, use_tf=False):
     XY_bt = jnp.concatenate([obs, target[:, -1:]], axis=-1)
-    return (self.tf_loss if use_tf else self.loss)(XY_bt, past=past)
+    return (self.tf_loss if use_tf else self.loss)(XY_bt, past)
 
   def eval(self, sample, use_tf=False):
     print("eval sample", sample["obs"].shape)
@@ -541,7 +537,7 @@ class TransformerV3:
     return initial_logits, (iniital_token, initial_presents, initial_len, key)
 
   def generate_once(self, next_token, decode_state, decode_len):
-    next_logits, next_presents = self.model(self.cx, next_token, past=decode_state, past_len=decode_len)
+    next_logits, next_presents = self.model(self.cx, next_token, decode_state, decode_len)
     return next_logits, next_presents
 
   def generate_xmap(self, state, key, ctx, ctx_length, aux, sampler_options):
