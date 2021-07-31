@@ -26,7 +26,7 @@ def load_tensor(reader, name: str) -> np.array:
   value = reader.get_tensor(name)
   # value = jnp.array(value)
   #key = '.'.join(name.split('/'))
-  key = name
+  key = pathutil.normpath('///' + name)
   # if value.shape and value.shape[0] == 1:
   #   value = np.squeeze(value, axis=0)
   return key, value
@@ -59,38 +59,199 @@ def load(config):
   pp({k: v.shape for k, v in state_dict.items()})
   return TransformerV3(config, state_dict)
 
+# Normalize the case of a pathname.  Trivial in Posix, string.lower on Mac.
+# On MS-DOS this may also turn slashes into backslashes; however, other
+# normalizations (such as optimizing '../' away) are not allowed
+# (another function should be defined to do that).
+
+def normcase(s):
+    """Normalize case of pathname.  Has no effect under Posix"""
+    return os.fspath(s)
+
+
+import genericpath
+
+
+class pathutil:
+    def _get_sep(path):
+        if isinstance(path, bytes):
+            return b'/'
+        else:
+            return '/'
+
+    # Return whether a path is absolute.
+    # Trivial in Posix, harder on the Mac or MS-DOS.
+
+    @classmethod
+    def isabs(cls, s):
+        """Test whether a path is absolute"""
+        s = os.fspath(s)
+        sep = cls._get_sep(s)
+        return s.startswith(sep)
+
+
+    # Join pathnames.
+    # Ignore the previous parts if a part is absolute.
+    # Insert a '/' unless the first part is empty or already ends in '/'.
+
+    @classmethod
+    def join(cls, a, *p):
+        """Join two or more pathname components, inserting '/' as needed.
+        If any component is an absolute path, all previous path components
+        will be discarded.  An empty last part will result in a path that
+        ends with a separator."""
+        a = os.fspath(a)
+        sep = cls._get_sep(a)
+        path = a
+        try:
+            if not p:
+                path[:0] + sep  #23780: Ensure compatible data type even if p is null.
+            for b in map(os.fspath, p):
+                if b.startswith(sep):
+                    path = b
+                elif not path or path.endswith(sep):
+                    path += b
+                else:
+                    path += sep + b
+        except (TypeError, AttributeError, BytesWarning):
+            genericpath._check_arg_types('join', a, *p)
+            raise
+        return path
+
+
+    # Split a path in head (everything up to the last '/') and tail (the
+    # rest).  If the path ends in '/', tail will be empty.  If there is no
+    # '/' in the path, head  will be empty.
+    # Trailing '/'es are stripped from head unless it is the root.
+
+    @classmethod
+    def split(cls, p):
+        """Split a pathname.  Returns tuple "(head, tail)" where "tail" is
+        everything after the final slash.  Either part may be empty."""
+        p = os.fspath(p)
+        sep = cls._get_sep(p)
+        i = p.rfind(sep) + 1
+        head, tail = p[:i], p[i:]
+        if head and head != sep*len(head):
+            head = head.rstrip(sep)
+        return head, tail
+
+    # Normalize a path, e.g. A//B, A/./B and A/foo/../B all become A/B.
+    # It should be understood that this may change the meaning of the path
+    # if it contains symbolic links!
+
+    def normpath(path):
+        """Normalize path, eliminating double slashes, etc."""
+        path = os.fspath(path)
+        if isinstance(path, bytes):
+            sep = b'/'
+            empty = b''
+            dot = b'.'
+            dotdot = b'..'
+        else:
+            sep = '/'
+            empty = ''
+            dot = '.'
+            dotdot = '..'
+        if path == empty:
+            return dot
+        initial_slashes = path.startswith(sep)
+        # POSIX allows one or two initial slashes, but treats three or more
+        # as single slash.
+        if (initial_slashes and
+            path.startswith(sep*2) and not path.startswith(sep*3)):
+            initial_slashes = 2
+        comps = path.split(sep)
+        new_comps = []
+        for comp in comps:
+            if comp in (empty, dot):
+                continue
+            if (comp != dotdot or (not initial_slashes and not new_comps) or
+                 (new_comps and new_comps[-1] == dotdot)):
+                new_comps.append(comp)
+            elif new_comps:
+                new_comps.pop()
+        comps = new_comps
+        path = sep.join(comps)
+        if initial_slashes:
+            path = sep*initial_slashes + path
+        return path or dot
+
+
+    # Return the tail (basename) part of a path, same as split(path)[1].
+
+    @classmethod
+    def basename(cls, p):
+        """Returns the final component of a pathname"""
+        p = os.fspath(p)
+        sep = cls._get_sep(p)
+        i = p.rfind(sep) + 1
+        return p[i:]
+
+
+    # Return the head (dirname) part of a path, same as split(path)[0].
+
+    @classmethod
+    def dirname(cls, p):
+        """Returns the directory component of a pathname"""
+        p = os.fspath(p)
+        sep = cls._get_sep(p)
+        i = p.rfind(sep) + 1
+        head = p[:i]
+        if head and head != sep*len(head):
+            head = head.rstrip(sep)
+        return head
+
+
+
 # ================================================================
 # Tf-like framework for Jax
 # ================================================================
 
-def create_root_context(prefix='model'):
-    return VariableContext({}, prefix=prefix)
+def create_root_context(state=None, *, prefix='/', **static_kwargs):
+    if state is None:
+        state = {}
+    return VariableContext(state, prefix=prefix, **static_kwargs)
 
 @tree_util.register_pytree_node_class
 class VariableContext(object):
-    def __init__(self, name2val, prefix, allow_new=True):
+    def __init__(self, name2val, *, prefix, allow_new=True, **static_kwargs):
+        self.static_kwargs = static_kwargs
+        for k, v in static_kwargs.items():
+          setattr(self, k, v)
         self.name2val = name2val
         self.prefix = prefix
         self.allow_new = allow_new
+
     def tree_flatten(self):
-        return ((self.name2val,), {'prefix': self.prefix, 'allow_new': self.allow_new})
+        return ((self.name2val,), {**self.static_kwargs, 'prefix': self.prefix, 'allow_new': self.allow_new})
+
     @classmethod
     def tree_unflatten(cls, aux_data, children):
         return cls(*children, **aux_data)
+
     def __eq__(self, other):
-        return type(self) is type(other) and (self.name2val, self.prefix) == (other.name2val, other.prefix)
+        if not isinstance(other, self.__class__):
+          return False
+        return (self.name2val, self.prefix, self.static_kwargs) == (other.name2val, other.prefix, other.static_kwargs)
+
     def __repr__(self):
-        if self.allow_new:
-            return "VariableContext(prefix={})".format(self.prefix)
-        else:
-            return "VariableContext(prefix={}, allow_new=False)".format(self.prefix)
-    def scope(self, name):
+        kws = {'prefix': self.prefix, 'allow_new': self.allow_new, **self.static_kwargs}
+        kws = {k: v for k, v in kws.items() if v is not False}
+        kws = ', '.join(['='.join([k, repr(v)]) for k, v in kws.items()])
+        return "VariableContext({})".format(kws)
+
+    def scope(self, name='', **static_kwargs):
         return VariableContext(self.name2val, 
-            self._join(self.prefix, name), self.allow_new)
+            prefix=self._join(self.prefix, name),
+            allow_new=self.allow_new,
+            **{**self.static_kwargs, **static_kwargs})
+
     def get_variable(self, name, initializer):
         return self.get_variable_absolute(
             name=self._join(self.prefix, name), 
             initializer=initializer)
+
     def get_variable_absolute(self, name, initializer):
         if name not in self.name2val:
             assert self.allow_new
@@ -98,16 +259,13 @@ class VariableContext(object):
             assert type(val) == np.ndarray and val.dtype == np.float32
             # val = jnp.array(val)
             self.name2val[name] = val
-
         return self.name2val[name]
+
     def _join(self, *xs):
-        return '/'.join(xs)
+        return pathutil.normpath(pathutil.join(*xs))
+
     def variables_list(self):
         return list(self.name2val.values())
-    def replace_with_list(self, newlist):
-        assert len(newlist) == len(self.name2val)
-        name2val = {k : v for (k, v) in zip(self.name2val.keys(), newlist)}
-        return VariableContext(name2val, self.prefix, self.allow_new)
 
 def print_variables(cx):
     for (name, val) in sorted(cx.name2val.items()):
@@ -207,8 +365,9 @@ def past_length(past):
     return KV_bthr.shape[-3]
 
 # @partial(jax.jit, static_argnames=['n_state', 'n_head'])
-def attn(cx, X_btk, n_state, n_head, past=None):
-    B, T, _K = X_btk.shape
+def attn(cx, X_btk, past=None):
+    n_head = cx.n_head
+    B, T, n_state = X_btk.shape
     assert n_state % n_head==0
     QKV_b_t_3s = dense(cx.scope('c_attn'), X_btk, n_state * 3)
     QKV_b_t_3h_r = jnp.reshape(QKV_b_t_3s, (B, T, 3 * n_head, n_state // n_head))
@@ -249,27 +408,27 @@ def attn(cx, X_btk, n_state, n_head, past=None):
     P_bts = dense(cx.scope('c_proj'), A_bts, n_state)
     return P_bts, present
 
-@partial(jax.jit, static_argnames=['n_hid'])
-def mlp(cx, X_bts, *, n_hid):
+@partial(jax.jit, static_argnames=[])
+def mlp(cx, X_bts):
     S = X_bts.shape[-1]
+    n_hid = S * 4
     H_bth = gelu(dense(cx.scope('c_fc'), X_bts, n_hid))
     Y_bts = dense(cx.scope('c_proj'), H_bth, S)
     return Y_bts
 
-def block(cx, x, *, n_head, past=None):
-    S = x.shape[-1]
-    a, present = attn(cx.scope('attn'), norm(cx.scope('ln_1'), x), S, n_head, past=past)
+def block(cx, x, *, past=None):
+    a, present = attn(cx.scope('attn'), norm(cx.scope('ln_1'), x), past=past)
     x = x + a
-    m = mlp(cx.scope('mlp'), norm(cx.scope('ln_2'), x), n_hid=S * 4)
+    m = mlp(cx.scope('mlp'), norm(cx.scope('ln_2'), x))
     x = x + m
     return x, present
 
-def transformer(cx, tok_bt, *, n_vocab, n_head, n_layer, n_ctx, n_embd, past=None):
+def transformer(cx, tok_bt, *, past=None):
     B, T = tok_bt.shape
     pos_bt = jax.lax.broadcasted_iota(jnp.int32, (B, T), 1)
     pos_bt = pos_bt + past_length(past)
-    tokenembs_qe = cx.get_variable('wte', initializer=lambda: normc(n_vocab, n_embd) * 0.1)
-    posembs_pe = cx.get_variable('wpe', initializer=lambda: normc(n_ctx, n_embd) * 0.1)
+    tokenembs_qe = cx.get_variable('wte', initializer=lambda: normc(cx.n_vocab, cx.n_embd) * 0.1)
+    posembs_pe = cx.get_variable('wpe', initializer=lambda: normc(cx.n_ctx, cx.n_embd) * 0.1)
     #tokenemb_bte = tokenembs_qe[tuple(tok_bt)]
     tokenemb_bte = tokenembs_qe[tok_bt]
     posemb_bte = posembs_pe[pos_bt]
@@ -277,12 +436,12 @@ def transformer(cx, tok_bt, *, n_vocab, n_head, n_layer, n_ctx, n_embd, past=Non
     if len(last_bts.shape) < 3:
         last_bts = last_bts[jnp.newaxis, ...]
     presents = []
-    #pasts = unstack(past, axis=1) if past is not None else [None] * n_layer
-    pasts = past if past is not None else [None] * n_layer
+    #pasts = unstack(past, axis=1) if past is not None else [None] * cx.n_layer
+    pasts = past if past is not None else [None] * cx.n_layer
     prev_bts = None
-    for layer in range(n_layer):
+    for layer in range(cx.n_layer):
         prev_bts = last_bts
-        last_bts, present = block(cx.scope(f'h{layer:d}'), last_bts, n_head=n_head, past=pasts[layer])
+        last_bts, present = block(cx.scope(f'h{layer:d}'), last_bts, past=pasts[layer])
         presents.append(present)
     last_bts = norm(cx.scope('ln_f'), last_bts)
     logits_btq = np.matmul(last_bts, tokenembs_qe.T)
@@ -303,30 +462,20 @@ def scan(f, init, xs, length=None):
 
 
 class TransformerV3:
-  def __init__(self, config, params):
+  def __init__(self, config, params=None, prefix='/model'):
     self.config = config
 
     model_name = config['model_name']
-    hparams = tf_model.default_hparams()
     with open(os.path.join('models', model_name, 'hparams.json')) as f:
-        hparams.override_from_dict(json.load(f))
-    self.hparams = hparams
+        self.hparams = json.load(f)
 
-    n_ctx = config['seq']
-    n_head = config['n_heads']
-    n_layer = config['layers']
-    n_embd = config['d_model']
-    n_vocab = config['n_vocab']
-    self.model = functools.partial(transformer, n_vocab=n_vocab,
-        n_head=n_head, n_layer=n_layer, n_ctx=n_ctx, n_embd=n_embd)
+    self.cx = create_root_context(params, prefix=prefix, **self.hparams)
 
-    self.params = params
-    self.cx = create_root_context()
+    self.model = transformer
 
-    self.loss(jnp.zeros((1, n_ctx+1), dtype=jnp.int32)) # Just create variables
+    self.loss(jnp.zeros((1, self.cx.n_ctx+1), dtype=jnp.int32)) # Just create variables
     self.cx.allow_new = False
     print_variables(self.cx)
-    self.state = self.cx.variables_list()
 
 
   def loss(self, XY_bt, past=None):
@@ -338,12 +487,16 @@ class TransformerV3:
     loglosses_bt = - logprobs_btq.reshape((B*T, -1))[ np.arange(B*T), Y_bt.reshape((-1,))]
     return loglosses_bt.mean(), presents
 
+  def tf_hparams(self):
+    hparams = tf_model.default_hparams()
+    hparams.override_from_dict(self.hparams)
+    return hparams
 
   def tf_loss(self, context, past=None):
     X_bt = context[:, :-1]
     B, T = X_bt.shape
     Y_bt = context[:, 1:]
-    output = tf_model.model(self.hparams, tf.convert_to_tensor(X_bt), past=past)
+    output = tf_model.model(self.tf_hparams(), tf.convert_to_tensor(X_bt), past=past)
     loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
         labels=context[:, 1:],
         logits=output['logits'])
@@ -396,7 +549,7 @@ class TransformerV3:
     else:
         ctx_length = np.array([len(sample["obs"][0])] * len(sample["obs"]))
 
-    out, presents = self.eval_xmap(self.state, sample["obs"], sample["target"], ctx_length, use_tf=use_tf)
+    out, presents = self.eval_xmap(self.cx, sample["obs"], sample["target"], ctx_length, use_tf=use_tf)
     print(f"eval dispatched in {time.time() - start:.06}s")
 
     # np.array(out["loss"])
@@ -460,7 +613,7 @@ class TransformerV3:
     aux = jnp.zeros((batch_size, gen_length), dtype=jnp.uint32)
     self.gen_length = gen_length
 
-    return self.generate_xmap(self.state,
+    return self.generate_xmap(self.cx,
                               jnp.array(key.take(batch_size)),
                               ctx,
                               np.array(ctx_length, dtype=np.uint32),
@@ -626,8 +779,6 @@ if __name__ == '__main__':
 
   with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
     network = load(config)
-
-    network.cx.name2val = network.params
 
     # xs, tree = tree_util.tree_flatten(network.cx)
     # actual = tree_util.tree_unflatten(tree, xs)
