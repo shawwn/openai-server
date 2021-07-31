@@ -625,14 +625,15 @@ if __name__ == '__main__':
     # xs, tree = tree_util.tree_flatten(network.cx)
     # actual = tree_util.tree_unflatten(tree, xs)
 
-    tf_model.tf.get_variable = get_variable
-    X_bt = np.zeros((1, 1024), dtype=jnp.int32)
-    Y_bt = np.zeros((1, 1024), dtype=jnp.int32)
-    X = tf.convert_to_tensor(np.zeros((1, 1025), dtype=jnp.int32))
-    jx_loss = network.eval({ 'obs': X_bt, 'target': Y_bt, })
-    tf_loss = network.eval({ 'obs': X_bt, 'target': Y_bt, }, use_tf=True)
-    print(jx_loss, tf_loss.numpy())
-    self = network
+    compare_with_tensorflow = False
+    if compare_with_tensorflow:
+      tf_model.tf.get_variable = get_variable
+      X_bt = np.zeros((1, 1024), dtype=jnp.int32)
+      Y_bt = np.zeros((1, 1024), dtype=jnp.int32)
+      X = tf.convert_to_tensor(np.zeros((1, 1025), dtype=jnp.int32))
+      jx_loss = network.eval({ 'obs': X_bt, 'target': Y_bt, })
+      tf_loss = network.eval({ 'obs': X_bt, 'target': Y_bt, }, use_tf=True)
+      print(jx_loss, tf_loss.numpy())
 
     per_replica_batch = config["per_replica_batch"]
     total_batch = per_replica_batch * jax.device_count() // cores_per_replica
