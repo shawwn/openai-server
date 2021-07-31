@@ -247,7 +247,7 @@ class VariableContext(object):
             allow_new=self.allow_new,
             **{**self.static_kwargs, **static_kwargs})
 
-    def get_variable(self, name, initializer):
+    def get_variable(self, name, initializer=None):
         return self.get_variable_absolute(
             name=self._join(self.prefix, name), 
             initializer=initializer)
@@ -394,29 +394,36 @@ def block(cx, x, past=None):
     x = x + m
     return x, present
 
-
-def transformer(cx, tok_bt, past=None, past_len=None):
+def initial_embed(cx, tok_bt, past_len=None):
     B, T = tok_bt.shape
     pos_bt = jax.lax.broadcasted_iota(jnp.int32, (B, T), 1)
-    if past_len is None:
-      past_len = past_length(past)
     pos_bt = pos_bt + past_len
-    tokenembs_qe = cx.get_variable('wte', initializer=lambda: normc(cx.n_vocab, cx.n_embd) * 0.1)
+    tokembs_qe = cx.get_variable('wte', initializer=lambda: normc(cx.n_vocab, cx.n_embd) * 0.1)
     posembs_pe = cx.get_variable('wpe', initializer=lambda: normc(cx.n_ctx, cx.n_embd) * 0.1)
-    #tokenemb_bte = tokenembs_qe[tuple(tok_bt)]
-    tokenemb_bte = tokenembs_qe[tok_bt]
-    posemb_bte = posembs_pe[pos_bt]
-    last_bts = tokenemb_bte + posemb_bte
+    tokemb_bte = tokembs_qe[tuple([tok_bt])]
+    posemb_bte = posembs_pe[tuple([pos_bt])]
+    last_bts = tokemb_bte + posemb_bte
     if len(last_bts.shape) < 3:
         last_bts = last_bts[jnp.newaxis, ...]
+    return last_bts
+
+@jax.jit
+def final_embed(cx, last_bts):
+    tokembs_qe = cx.get_variable('wte')
+    last_bts = norm(cx.scope('ln_f'), last_bts)
+    logits_btq = jnp.matmul(last_bts, tokembs_qe.T)
+    return logits_btq
+
+def transformer(cx, tok_bt, past=None, past_len=None):
+    if past_len is None:
+      past_len = past_length(past)
+    last_bts = initial_embed(cx, tok_bt, past_len)
     presents = []
-    #pasts = unstack(past, axis=1) if past is not None else [None] * cx.n_layer
     pasts = past if past is not None else [None] * cx.n_layer
     for layer in range(cx.n_layer):
         last_bts, present = block(cx.scope(f'h{layer:d}'), last_bts, pasts[layer])
         presents.append(present)
-    last_bts = norm(cx.scope('ln_f'), last_bts)
-    logits_btq = jnp.matmul(last_bts, tokenembs_qe.T)
+    logits_btq = final_embed(cx, last_bts)
     return logits_btq, presents
 
 def scan(f, init, xs, length=None):
@@ -427,7 +434,7 @@ def scan(f, init, xs, length=None):
   for x in xs:
     carry, y = f(carry, x)
     ys.append(y)
-  return carry, np.stack(ys)
+  return carry, jnp.stack(ys)
 
 
 class TransformerV3:
@@ -578,7 +585,7 @@ class TransformerV3:
     return self.generate_xmap(self.cx,
                               jnp.array(key.take(batch_size)),
                               ctx,
-                              np.array(ctx_length, dtype=np.uint32),
+                              jnp.array(ctx_length, dtype=jnp.uint32),
                               aux,
                               sampler_options)
   
