@@ -825,12 +825,13 @@ if __name__ == '__main__':
       'per_replica_batch': 1,
       }
 
-  try:
-    from jax.experimental.compilation_cache import compilation_cache as cc
-    cc.initialize_cache('cache')
-    print('Using compilation cache')
-  except AttributeError:
-    print('Not using compilation cache')
+  if bool(int(os.environ.get('TPU_CACHE', '0'))):
+    try:
+      from jax.experimental.compilation_cache import compilation_cache as cc
+      cc.initialize_cache('cache')
+      print('Using compilation cache')
+    except AttributeError:
+      print('Failed to initialize the compilation cache')
 
   tokenizer = encoder.get_encoder(config['model_name'])
 
