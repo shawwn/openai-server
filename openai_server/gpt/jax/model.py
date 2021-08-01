@@ -17,10 +17,10 @@ import functools
 from functools import partial
 import time
 import random
+import math
+import re
 
 gState = {}
-
-import math
 
 def nextpow2(x):
     """Returns the next power of 2 greater than or equal to `x`"""
@@ -476,31 +476,33 @@ class TransformerV3:
     self.model = transformer
     # self.model_jit = jax.jit(self.model)
 
-    past_spec_i = [['(_, n, _, _)', '(_, n, _, _)'] for _ in range(self.cx.n_layer)]
-    past_spec_o = [['(_, n + 1, _, _)', '(_, n + 1, _, _)'] for _ in range(self.cx.n_layer)]
-    @partial(mask, in_shapes=['(1, 1)', past_spec_i, ''], out_shape=('(1, 1, _)', past_spec_o))
-    @jax.named_call
-    def generate_once(next_token, decode_state, decode_len):
-      next_logits, next_presents = self.model(self.cx, next_token, decode_state, decode_len)
-      return next_logits, next_presents
-    #self.generate_once_masked = jax.jit(generate_once)
-    self.generate_once_masked = generate_once
-    @jax.named_call
-    def generate_once_wrapped(next_token, decode_state, decode_len):
-        pp(dict(name='_generate_once_wrapped', next_token=next_token, decode_state=decode_state, decode_len=decode_len))
-        n = decode_len.item()
-        k = (n + 15) // 16 * 16
-        padded_state = padpasts(decode_state, k)
-        return self.generate_once_masked([next_token, padded_state, decode_len], dict(n=n))
-    self.generate_once_wrapped = generate_once_wrapped
-
     self.loss(jnp.zeros((1, self.cx.n_ctx+1), dtype=jnp.int32)) # Just create variables
     self.cx.allow_new = False
     print_variables(self.cx)
 
+    cx_spec = jax.tree_util.tree_map(lambda x: re.sub(r'[0-9]+', '_', str(x.shape)), self.cx)
+    past_spec_i = [['(_, n, _, _)', '(_, n, _, _)'] for _ in range(self.cx.n_layer)]
+    past_spec_o = [['(_, n + 1, _, _)', '(_, n + 1, _, _)'] for _ in range(self.cx.n_layer)]
+    @partial(mask, in_shapes=[cx_spec, '(1, 1)', past_spec_i, ''], out_shape=('(1, 1, _)', past_spec_o))
+    @jax.named_call
+    def generate_once(cx, next_token, decode_state, decode_len):
+      next_logits, next_presents = self.model(cx, next_token, decode_state, decode_len)
+      return next_logits, next_presents
+    #self.generate_once_masked = jax.jit(generate_once)
+    self.generate_once_masked = generate_once
+    @jax.named_call
+    def generate_once_wrapped(cx, next_token, decode_state, decode_len):
+        pp(dict(name='_generate_once_wrapped', next_token=next_token, decode_state=decode_state, decode_len=decode_len))
+        n = decode_len.item()
+        k = (n + 15) // 16 * 16
+        padded_state = padpasts(decode_state, k)
+        return self.generate_once_masked([cx, next_token, padded_state, decode_len], dict(n=n))
+    self.generate_once_wrapped = generate_once_wrapped
+
+
   @jax.named_call
-  def gen_once(self, next_token, decode_state, decode_len):
-    output, new_state = self.generate_once_masked([next_token, decode_state, decode_len], dict(n=decode_len))
+  def gen_once(self, cx, next_token, decode_state, decode_len):
+    output, new_state = self.generate_once_masked([cx, next_token, decode_state, decode_len], dict(n=decode_len))
     clipped_state = jax.tree_util.tree_map(lambda x: x[:, 0:-1, :, :], new_state)
     return output, clipped_state
     
@@ -623,7 +625,7 @@ class TransformerV3:
           next_token, decode_state, decode_len, sample_key = carry
           sample_key, new_key = jax.random.split(sample_key)
 
-          output, new_state = self.gen_once(next_token, decode_state, decode_len)
+          output, new_state = self.gen_once(state, next_token, decode_state, decode_len)
           next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
 
           output = next_token
