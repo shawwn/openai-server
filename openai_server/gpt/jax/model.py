@@ -601,14 +601,14 @@ class TransformerV3:
     return out
 
   @jax.named_call
-  def generate_initial(self, cx, context, ctx_length, key, gen_length=1):
+  def generate_initial(self, cx, context, ctx_length, key, gen_length=0):
     count = ctx_length[-1]
     assert (ctx_length == count).all()
     initial_context = context[..., context.shape[-1] - count:-1]
     initial_token = context[..., -1:]
-    logits, presents = self.model(self.cx, initial_context)
+    logits, presents = self.model(cx, initial_context)
     initial_logits = logits[..., -1, :]
-    initial_padding = nextbucket(gen_length, self.config.get('bucket_size', 16))
+    initial_padding = 1 if gen_length <= 0 else nextbucket(gen_length, self.config.get('bucket_size', 16))
     pp(dict(_name='generate_initial', count=count, initial_padding=initial_padding, gen_length=gen_length, key=key))
     initial_presents = padpasts(presents, initial_padding)
     initial_len = jnp.array(past_length(presents))
