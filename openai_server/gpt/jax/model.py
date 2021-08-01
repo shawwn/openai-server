@@ -364,7 +364,7 @@ def attn(cx, X_btk, past):
     assert n_state % n_head==0
     QKV_b_t_3s = dense(cx.scope('c_attn'), X_btk, n_state * 3)
     QKV_b_t_3h_r = jnp.reshape(QKV_b_t_3s, (B, T, 3 * n_head, n_state // n_head))
-    Q_bthr, K_bthr, V_bthr = jnp.split(QKV_b_t_3h_r, 3, axis=2)
+    Q_bthr, K_bthr, V_bthr = jnp.split(QKV_b_t_3h_r, 3, axis=-2)
     if past is not None:
         pk, pv = past
         K_bthr = jnp.concatenate([pk, K_bthr], axis=-3)
