@@ -290,27 +290,24 @@ def randn(shape, stddev):
 # def gelu(x):
 #     return 0.5*x*(1+np.tanh(0.79788*(x+0.044715*x**3)))
 
-# from jax.nn import gelu
-from jax.experimental.stax import gelu
+from jax.nn import gelu
 
-@jax.jit
-def _norm(x, g, b, e=1e-5):
-    axis = -1
+@partial(jax.jit, static_argnames=['eps', 'axis'])
+def _norm(x, g, b, *, eps=1e-5, axis=-1):
     u = jnp.mean(x, axis=axis, keepdims=True)
     s = jnp.mean(jnp.square(x-u), axis=axis, keepdims=True)
-    x = (x - u) / jnp.sqrt(s + e)
+    x = (x - u) / jnp.sqrt(s + eps)
     assert g is not None and b is not None
     x = x * g + b
     return x
 
 # @partial(jax.jit, static_argnames=['cx'])
-@jax.jit
-def norm(cx, x):
-    axis = -1
+@partial(jax.jit, static_argnames=['eps', 'axis'])
+def norm(cx, x, *, eps=1e-5, axis=-1):
     n_state = x.shape[axis]
     g = cx.get_variable("g", initializer=lambda : np.ones(n_state, 'f'))
     b = cx.get_variable("b", initializer=lambda : np.zeros(n_state, 'f'))
-    return _norm(x, g, b)
+    return _norm(x, g, b, eps=eps, axis=axis)
 
 @partial(jax.jit, static_argnames=['nd', 'ns', 'dtype'])
 def attention_mask(nd, ns, *, dtype):
