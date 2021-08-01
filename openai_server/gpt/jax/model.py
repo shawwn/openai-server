@@ -592,7 +592,7 @@ class TransformerV3:
     return out
 
   @jax.named_call
-  def generate_initial(self, context, ctx_length, key, gen_length=1):
+  def generate_initial(self, cx, context, ctx_length, key, gen_length=1):
     count = ctx_length[-1]
     assert (ctx_length == count).all()
     initial_context = context[..., context.shape[-1] - count:-1]
@@ -603,7 +603,7 @@ class TransformerV3:
     pp(dict(_name='generate_initial', count=count, initial_padding=initial_padding, gen_length=gen_length, key=key))
     initial_presents = padpasts(presents, initial_padding)
     initial_len = jnp.array(past_length(presents))
-    return initial_logits, (initial_token, initial_presents, initial_len, key)
+    return initial_logits, (cx, initial_token, initial_presents, initial_len, key)
 
   @jax.named_call
   def generate_once(self, next_token, decode_state, decode_len):
@@ -611,7 +611,7 @@ class TransformerV3:
     return next_logits, next_presents
 
   @jax.named_call
-  def generate_xmap(self, state, key, ctx, ctx_length, aux, sampler_options):
+  def generate_xmap(self, cx, key, ctx, ctx_length, aux, sampler_options):
     sampler = self.config["sampler"]
     gen_length = self.gen_length
 
@@ -622,14 +622,14 @@ class TransformerV3:
 
         @jax.named_call
         def generate_scan_fn(carry, sampler_input):
-          next_token, decode_state, decode_len, sample_key = carry
+          state, next_token, decode_state, decode_len, sample_key = carry
           sample_key, new_key = jax.random.split(sample_key)
 
           output, new_state = self.gen_once(state, next_token, decode_state, decode_len)
           next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
 
           output = next_token
-          new_carry = (next_token, new_state, decode_len + 1, new_key)
+          new_carry = (state, next_token, new_state, decode_len + 1, new_key)
           return new_carry, output
 
         final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=None, length=gen_length)
@@ -639,7 +639,7 @@ class TransformerV3:
 
     # generate_fn = hk.transform(generate_sample).apply
     # return generate_fn(state["params"], key, ctx, ctx_length, aux)
-    _, initial_state = self.generate_initial(ctx, ctx_length, key[0], gen_length)
+    _, initial_state = self.generate_initial(cx, ctx, ctx_length, key[0], gen_length)
     result = self.generate_sample(initial_state, gen_length, sampler_options)
     return result
 
