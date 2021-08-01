@@ -18,13 +18,18 @@ from functools import partial
 import time
 import random
 
-gBreak = False
-gBreak2 = False
+gState = {}
+
+import math
+
+def nextpow2(x):
+    """Returns the next power of 2 greater than or equal to `x`"""
+    return 1 if x == 0 else 2**math.ceil(math.log2(x))
 
 def load_tensor(reader, name: str) -> np.array:
   #name = '.'.join(name.split('/')[1:])
   value = reader.get_tensor(name)
-  # value = jnp.array(value)
+  value = jnp.array(value)
   #key = '.'.join(name.split('/'))
   key = pathutil.normpath('///' + name)
   # if value.shape and value.shape[0] == 1:
@@ -292,7 +297,7 @@ def randn(shape, stddev):
 
 from jax.nn import gelu
 
-@partial(jax.jit, static_argnames=['eps', 'axis'])
+# @partial(jax.jit, static_argnames=['eps', 'axis'])
 def _norm(x, g, b, *, eps=1e-5, axis=-1):
     u = jnp.mean(x, axis=axis, keepdims=True)
     s = jnp.mean(jnp.square(x-u), axis=axis, keepdims=True)
@@ -302,21 +307,21 @@ def _norm(x, g, b, *, eps=1e-5, axis=-1):
     return x
 
 # @partial(jax.jit, static_argnames=['cx'])
-@partial(jax.jit, static_argnames=['eps', 'axis'])
+# @partial(jax.jit, static_argnames=['eps', 'axis'])
 def norm(cx, x, *, eps=1e-5, axis=-1):
     n_state = x.shape[axis]
     g = cx.get_variable("g", initializer=lambda : np.ones(n_state, 'f'))
     b = cx.get_variable("b", initializer=lambda : np.zeros(n_state, 'f'))
     return _norm(x, g, b, eps=eps, axis=axis)
 
-@partial(jax.jit, static_argnames=['nd', 'ns', 'dtype'])
+# @partial(jax.jit, static_argnames=['nd', 'ns', 'dtype'])
 def attention_mask(nd, ns, *, dtype):
     i = jnp.arange(nd)[:,None]
     j = jnp.arange(ns)
     m = i >= j - ns + nd
     return m.astype(dtype)
 
-@jax.jit
+# @jax.jit
 def mask_attn_weights(w):
     *_, nd, ns = w.shape
     if nd <= 1:
@@ -326,21 +331,21 @@ def mask_attn_weights(w):
     w = w * b - jnp.array(1e9, dtype=w.dtype) * (1 - b)
     return w
 
-@partial(jax.jit, static_argnames=['F'])
+# @partial(jax.jit, static_argnames=['F'])
 def _dense(X_btk, W_kf, b_f, F):
     B, T, K = X_btk.shape
     X_bt_k = jnp.reshape(X_btk, (-1, K))
     Y_bt_f = jnp.matmul(X_bt_k, W_kf) + b_f
     return jnp.reshape(Y_bt_f, (B, T, F))
 
-@partial(jax.jit, static_argnames=['F'])
+# @partial(jax.jit, static_argnames=['F'])
 def dense(cx, X_btk, F):
     B, T, K = X_btk.shape
     W_kf = cx.get_variable("w", initializer=lambda: normc(K, F))
     b_f = cx.get_variable("b", initializer=lambda: np.zeros(F,'f'))
     return _dense(X_btk, W_kf, b_f, F)
 
-@partial(jax.jit, static_argnames=['axis'])
+# @partial(jax.jit, static_argnames=['axis'])
 def unstack(a, axis=0):
     return [jnp.squeeze(e, axis) for e in jnp.split(a, a.shape[axis], axis = axis)]
 
@@ -376,7 +381,7 @@ def attn(cx, X_btk, past):
     P_bts = dense(cx.scope('c_proj'), A_bts, n_state)
     return P_bts, present
 
-@partial(jax.jit, static_argnames=[])
+# @partial(jax.jit, static_argnames=[])
 def mlp(cx, X_bts):
     S = X_bts.shape[-1]
     n_hid = S * 4
@@ -404,7 +409,7 @@ def initial_embed(cx, tok_bt, past_len=None):
         last_bts = last_bts[jnp.newaxis, ...]
     return last_bts
 
-@jax.jit
+# @jax.jit
 def final_embed(cx, last_bts):
     tokembs_qe = cx.get_variable('wte')
     last_bts = norm(cx.scope('ln_f'), last_bts)
@@ -434,6 +439,15 @@ def scan(f, init, xs, length=None):
   return carry, jnp.stack(ys)
 
 
+def padpasts(pasts, past_len):
+  n = past_length(pasts)
+  k = past_len - n
+  if k > 0:
+    return jax.tree_util.tree_map(lambda x: jnp.pad(x, ((0,0),(0,k),(0,0),(0,0))), pasts)
+  return pasts
+
+
+
 class TransformerV3:
   def __init__(self, config, params=None, prefix='/model'):
     self.config = config
@@ -445,11 +459,33 @@ class TransformerV3:
     self.cx = create_root_context(params, prefix=prefix, **self.hparams)
 
     self.model = transformer
+    self.model_jit = jax.jit(self.model)
+
+    past_spec_i = [['(_, n, _, _)', '(_, n, _, _)'] for _ in range(self.cx.n_layer)]
+    past_spec_o = [['(_, n + 1, _, _)', '(_, n + 1, _, _)'] for _ in range(self.cx.n_layer)]
+    @partial(mask, in_shapes=['(1, 1)', past_spec_i, ''], out_shape=('(1, 1, _)', past_spec_o))
+    def generate_once(next_token, decode_state, decode_len):
+      next_logits, next_presents = self.model(self.cx, next_token, decode_state, decode_len)
+      return next_logits, next_presents
+    #self.generate_once_masked = jax.jit(generate_once)
+    self.generate_once_masked = generate_once
+    def generate_once_wrapped(next_token, decode_state, decode_len):
+        pp(dict(name='_generate_once_wrapped', next_token=next_token, decode_state=decode_state, decode_len=decode_len))
+        n = decode_len.item()
+        k = (n + 15) // 16 * 16
+        padded_state = padpasts(decode_state, k)
+        return self.generate_once_masked([next_token, padded_state, decode_len], dict(n=n))
+    self.generate_once_wrapped = generate_once_wrapped
 
     self.loss(jnp.zeros((1, self.cx.n_ctx+1), dtype=jnp.int32)) # Just create variables
     self.cx.allow_new = False
     print_variables(self.cx)
 
+  def gen_once(self, next_token, decode_state, decode_len):
+    output, new_state = self.generate_once_masked([next_token, decode_state, decode_len], dict(n=decode_len))
+    clipped_state = jax.tree_util.tree_map(lambda x: x[:, 0:-1, :, :], new_state)
+    return output, clipped_state
+    
 
   def loss(self, XY_bt, past=None):
     X_bt = XY_bt[:, :-1]
@@ -529,46 +565,52 @@ class TransformerV3:
     print(f"eval done in {time.time() - start:.06}s")
     return out
 
-  def generate_initial(self, context, ctx_length, key):
+  def generate_initial(self, context, ctx_length, key, gen_length=1):
     count = ctx_length[-1]
     assert (ctx_length == count).all()
     initial_context = context[..., context.shape[-1] - count:-1]
-    iniital_token = context[..., -1:]
+    initial_token = context[..., -1:]
     logits, presents = self.model(self.cx, initial_context)
     initial_logits = logits[..., -1, :]
-    initial_presents = presents
-    initial_len = past_length(initial_presents)
-    return initial_logits, (iniital_token, initial_presents, initial_len, key)
+    initial_padding = nextpow2(gen_length)
+    pp(dict(_name='generate_initial', count=count, initial_padding=initial_padding, gen_length=gen_length, key=key))
+    initial_presents = padpasts(presents, initial_padding)
+    initial_len = jnp.array(past_length(presents))
+    return initial_logits, (initial_token, initial_presents, initial_len, key)
 
   def generate_once(self, next_token, decode_state, decode_len):
     next_logits, next_presents = self.model(self.cx, next_token, decode_state, decode_len)
     return next_logits, next_presents
 
   def generate_xmap(self, state, key, ctx, ctx_length, aux, sampler_options):
-    sampler = config["sampler"]
+    sampler = self.config["sampler"]
     gen_length = self.gen_length
 
-    def generate_sample(context, ctx_length, aux):
-      _, initial_state = self.generate_initial(context, ctx_length, key=key[0])
+    if not hasattr(self, 'generate_sample'):
+      @partial(jax.jit, static_argnames=['gen_length'])
+      def generate_sample(initial_state, gen_length, sampler_options):
 
-      def generate_scan_fn(carry, sampler_input):
-        next_token, decode_state, decode_len, sample_key = carry
-        sample_key, new_key = jax.random.split(sample_key)
+        def generate_scan_fn(carry, sampler_input):
+          next_token, decode_state, decode_len, sample_key = carry
+          sample_key, new_key = jax.random.split(sample_key)
 
-        output, new_state = self.generate_once(next_token, decode_state, decode_len)
-        next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
+          output, new_state = self.gen_once(next_token, decode_state, decode_len)
+          next_token, sample_info = sampler(sample_key, output, sampler_input, **sampler_options)
 
-        output = next_token
-        new_carry = (next_token, new_state, decode_len + 1, new_key)
-        return new_carry, output
+          output = next_token
+          new_carry = (next_token, new_state, decode_len + 1, new_key)
+          return new_carry, output
 
-      # final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=aux, length=gen_length)
-      final_state, outputs = scan(generate_scan_fn, initial_state, xs=None, length=gen_length)
-      return final_state, outputs[None, ...]
+        final_state, outputs = jax.lax.scan(generate_scan_fn, initial_state, xs=None, length=gen_length)
+        # final_state, outputs = scan(generate_scan_fn, initial_state, xs=None, length=gen_length)
+        return final_state, outputs[None, ...]
+      self.generate_sample = generate_sample
 
     # generate_fn = hk.transform(generate_sample).apply
     # return generate_fn(state["params"], key, ctx, ctx_length, aux)
-    return generate_sample(ctx, ctx_length, aux)
+    _, initial_state = self.generate_initial(ctx, ctx_length, key[0], gen_length)
+    result = self.generate_sample(initial_state, gen_length, sampler_options)
+    return result
 
   def generate(self, ctx, ctx_length, gen_length, sampler_options, seed=None):
     if seed is None:
@@ -713,17 +755,71 @@ def test_sharding_constraint():
   actual = f(x)
 
 
+from jax._src.numpy import lax_numpy
+from jax import core
+from jax.interpreters.masking import UniqueId, Poly, UndefinedPoly, eval_poly_shape
+import opt_einsum
+
+def _einsum_contract_path(*operands, **kwargs):
+  """Like opt_einsum.contract_path, with support for DimPolynomial shapes.
+
+  We use opt_einsum.contract_path to compute the schedule, using a fixed
+  constant for all dimension variables. This is safe because we throw an
+  error if there are more than 1 contractions. Essentially, we just use
+  opt_einsum.contract_path to parse the specification.
+  """
+
+  # Replace the polymorphic shapes with some concrete shapes for calling
+  # into opt_einsum.contract_path, because the latter wants to compute the
+  # sizes of operands and intermediate results.
+  fake_ops = []
+  for operand in operands:
+    # We replace only array operands
+    if not hasattr(operand, "dtype"):
+      fake_ops.append(operand)
+    else:
+      shape = np.shape(operand)
+      def fake_dim(d):
+        if core.is_constant_dim(d):
+          return d
+        else:
+          if not isinstance(d, Poly):
+            raise TypeError(f"Encountered unexpected shape dimension {d}")
+          # It is Ok to replace all polynomials with the same value. We may miss
+          # here some errors due to non-equal dimensions, but we catch them
+          # later.
+          return 8
+      fake_ops.append(jax.ShapeDtypeStruct(tuple(map(fake_dim, shape)),
+                                           operand.dtype))
+
+  contract_fake_ops, contractions = opt_einsum.contract_path(*fake_ops,
+                                                             **kwargs)
+  if len(contractions) > 1:
+    msg = ("Shape polymorphism is not yet supported for einsum with more than "
+           f"one contraction {contractions}")
+    raise ValueError(msg)
+  contract_operands = []
+  for operand in contract_fake_ops:
+    idx = tuple(i for i, fake_op in enumerate(fake_ops) if operand is fake_op)
+    assert len(idx) == 1
+    contract_operands.append(operands[idx[0]])
+  return contract_operands, contractions
+
+lax_numpy._polymorphic_einsum_contract_path_handlers[Poly] = _einsum_contract_path
+
+
+
 if __name__ == '__main__':
   np.random.seed(0)
   config = {
-      'model_name': '117M',
+      'model_name': os.environ.get('MODEL_NAME', '345M'),
       'cores_per_replica': jax.device_count(), #1,
-      'seq': 1024,
-      'n_vocab': 50257,
-      'n_heads': 12,
-      'layers': 12,
-      'd_model': 768,
-      'pe': 'fixed',
+      # 'seq': 1024,
+      # 'n_vocab': 50257,
+      # 'n_heads': 12,
+      # 'layers': 12,
+      # 'd_model': 768,
+      # 'pe': 'fixed',
       # 'sampler': sampling.nucleaus_sample,
       'sampler': softmax_sample,
       'per_replica_batch': 1,
@@ -762,26 +858,49 @@ if __name__ == '__main__':
     per_replica_batch = config["per_replica_batch"]
     total_batch = per_replica_batch * jax.device_count() // cores_per_replica
 
+    def prepare_sample(prompt, seed=None, batch_size=1, temp=0.75, **sampler_options):
+      sampler_options = jax.tree_util.tree_map(lambda x: np.ones(batch_size) * x, {'temp': temp, **sampler_options})
+      seed = seed or random.randint(0, 2**60)
+      key = jnp.array(hk.PRNGSequence(seed).take(batch_size))
+      if isinstance(prompt, str):
+        tokens = tokenizer.encode(prompt)
+      else:
+        tokens = prompt
+      provided_ctx = len(tokens)
+      pad_amount = max(0, network.cx.n_ctx - provided_ctx)
+      padded_tokens = np.pad(tokens, ((pad_amount, 0),)).astype(np.uint32)
+      batched_tokens = np.array([padded_tokens] * batch_size)
+      length = np.ones(batch_size, dtype=np.uint32) * len(tokens)
+      length = jnp.array(length, dtype=jnp.uint32)
+      return batched_tokens, length, key, sampler_options
+
+    def sample(prompt, gen_length, temp=0.75, seed=None, echo=True, batch_size=1):
+      batched_tokens, length, key, sampler_options = prepare_sample(prompt, batch_size=batch_size, temp=temp, seed=seed)
+      start = time.time()
+      _, output = network.generate(batched_tokens, length, gen_length, sampler_options, seed=seed)
+      output.block_until_ready()
+      print(f"completion done in {time.time() - start:06}s")
+      start = time.time()
+      output_ = np.squeeze(output)
+      print(f"squeezed in {time.time() - start:06}s")
+      start = time.time()
+      completion = tokenizer.decode(output_)
+      print(f"decoded in {time.time() - start:06}s")
+      if echo:
+        completion = prompt + completion
+      return completion
+
     for i in range(3):
       # prompt = input("Type input:")
       prompt = "Hello, my name is"
       tokens = tokenizer.encode(prompt)
 
-      start = time.time()
-
-      provided_ctx = len(tokens)
-      pad_amount = config['seq'] - provided_ctx
-
-      padded_tokens = np.pad(tokens, ((pad_amount, 0),)).astype(np.uint32)
-      batched_tokens = np.array([padded_tokens] * total_batch)
-      length = np.ones(total_batch, dtype=np.uint32) * len(tokens)
-
-      output = network.generate(batched_tokens, length, 32, {#"top_p": np.ones(total_batch) * 0.9,
-                                                             "temp": np.ones(total_batch) * 0.75}, seed=i+1)
-
-      print(f"completion done in {time.time() - start:06}s")
-      completion = prompt + tokenizer.decode(np.squeeze(output[1]))
+      completion = sample(prompt, 128, seed=i+1)
       print(repr(completion))
+
+    if True:
+      breakpoint()
+      print('')
 
 
 
