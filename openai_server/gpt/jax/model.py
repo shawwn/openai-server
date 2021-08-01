@@ -390,7 +390,7 @@ def attn(cx, X_btk, past):
         V_bthr = jnp.concatenate([pv, V_bthr], axis=-3)
     present = [K_bthr, V_bthr]
     R = Q_bthr.shape[-1]
-    W_bhtt = jnp.einsum("bthr,bThr->bhtT", Q_bthr, K_bthr) / jnp.sqrt(R)
+    W_bhtt = jnp.einsum("bthr,bThr->bhtT", Q_bthr, K_bthr) / jnp.sqrt(R).astype(default_dtype)
     W_bhtt = mask_attn_weights(W_bhtt)
     W_bhtt = stax.softmax(W_bhtt, axis=-1)
     A_bthr = jnp.einsum("bhtT,bThr->bthr", W_bhtt, V_bthr)
