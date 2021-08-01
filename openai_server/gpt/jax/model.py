@@ -22,24 +22,29 @@ import re
 
 gState = {}
 
+if jax.default_backend() == 'tpu' and bool(int(os.environ.get('BF16', '1'))):
+  default_dtype = jnp.bfloat16
+else:
+  default_dtype = jnp.float32
+
 def nextpow2(x):
     """Returns the next power of 2 greater than or equal to `x`"""
     return 1 if x == 0 else 2**math.ceil(math.log2(x))
 
-def load_tensor(reader, name: str) -> np.array:
+def load_tensor(reader, name: str, dtype=None) -> np.array:
   #name = '.'.join(name.split('/')[1:])
   value = reader.get_tensor(name)
-  value = jnp.array(value)
+  value = jnp.array(value, dtype=dtype or default_dtype)
   #key = '.'.join(name.split('/'))
   key = pathutil.normpath('///' + name)
   # if value.shape and value.shape[0] == 1:
   #   value = np.squeeze(value, axis=0)
   return key, value
 
-def load_state(name: str):
+def load_state(name: str, dtype=None):
   from tensorflow.python.training import py_checkpoint_reader
   reader = py_checkpoint_reader.NewCheckpointReader( 'models/{name}/model.ckpt'.format(name=name) )
-  state_dict = dict([load_tensor(reader, k) for k in list(reader.get_variable_to_shape_map().keys())])
+  state_dict = dict([load_tensor(reader, k, dtype=dtype) for k in list(reader.get_variable_to_shape_map().keys())])
   return state_dict
 
 import tensorflow as tf2
