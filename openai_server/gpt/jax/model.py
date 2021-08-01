@@ -298,6 +298,7 @@ def randn(shape, stddev):
 from jax.nn import gelu
 
 # @partial(jax.jit, static_argnames=['eps', 'axis'])
+@jax.named_call
 def _norm(x, g, b, *, eps=1e-5, axis=-1):
     u = jnp.mean(x, axis=axis, keepdims=True)
     s = jnp.mean(jnp.square(x-u), axis=axis, keepdims=True)
@@ -308,6 +309,7 @@ def _norm(x, g, b, *, eps=1e-5, axis=-1):
 
 # @partial(jax.jit, static_argnames=['cx'])
 # @partial(jax.jit, static_argnames=['eps', 'axis'])
+@jax.named_call
 def norm(cx, x, *, eps=1e-5, axis=-1):
     n_state = x.shape[axis]
     g = cx.get_variable("g", initializer=lambda : np.ones(n_state, 'f'))
@@ -315,6 +317,7 @@ def norm(cx, x, *, eps=1e-5, axis=-1):
     return _norm(x, g, b, eps=eps, axis=axis)
 
 # @partial(jax.jit, static_argnames=['nd', 'ns', 'dtype'])
+@jax.named_call
 def attention_mask(nd, ns, *, dtype):
     i = jnp.arange(nd)[:,None]
     j = jnp.arange(ns)
@@ -322,6 +325,7 @@ def attention_mask(nd, ns, *, dtype):
     return m.astype(dtype)
 
 # @jax.jit
+@jax.named_call
 def mask_attn_weights(w):
     *_, nd, ns = w.shape
     if nd <= 1:
@@ -332,6 +336,7 @@ def mask_attn_weights(w):
     return w
 
 # @partial(jax.jit, static_argnames=['F'])
+@jax.named_call
 def _dense(X_btk, W_kf, b_f, F):
     B, T, K = X_btk.shape
     X_bt_k = jnp.reshape(X_btk, (-1, K))
@@ -339,6 +344,7 @@ def _dense(X_btk, W_kf, b_f, F):
     return jnp.reshape(Y_bt_f, (B, T, F))
 
 # @partial(jax.jit, static_argnames=['F'])
+@jax.named_call
 def dense(cx, X_btk, F):
     B, T, K = X_btk.shape
     W_kf = cx.get_variable("w", initializer=lambda: normc(K, F))
@@ -346,6 +352,7 @@ def dense(cx, X_btk, F):
     return _dense(X_btk, W_kf, b_f, F)
 
 # @partial(jax.jit, static_argnames=['axis'])
+@jax.named_call
 def unstack(a, axis=0):
     return [jnp.squeeze(e, axis) for e in jnp.split(a, a.shape[axis], axis = axis)]
 
@@ -360,6 +367,7 @@ def past_length(past):
     return KV_bthr.shape[-3]
 
 # @partial(jax.jit, static_argnames=['n_state', 'n_head'])
+@jax.named_call
 def attn(cx, X_btk, past):
     n_head = cx.n_head
     B, T, n_state = X_btk.shape
@@ -382,6 +390,7 @@ def attn(cx, X_btk, past):
     return P_bts, present
 
 # @partial(jax.jit, static_argnames=[])
+@jax.named_call
 def mlp(cx, X_bts):
     S = X_bts.shape[-1]
     n_hid = S * 4
@@ -396,6 +405,7 @@ def block(cx, x, past):
     x = x + m
     return x, present
 
+@jax.named_call
 def initial_embed(cx, tok_bt, past_len=None):
     B, T = tok_bt.shape
     pos_bt = jax.lax.broadcasted_iota(jnp.int32, (B, T), 1)
@@ -410,12 +420,14 @@ def initial_embed(cx, tok_bt, past_len=None):
     return last_bts
 
 # @jax.jit
+@jax.named_call
 def final_embed(cx, last_bts):
     tokembs_qe = cx.get_variable('wte')
     last_bts = norm(cx.scope('ln_f'), last_bts)
     logits_btq = jnp.matmul(last_bts, tokembs_qe.T)
     return logits_btq
 
+@jax.named_call
 def transformer(cx, tok_bt, past=None, past_len=None):
     if past_len is None:
       past_len = past_length(past)
@@ -423,11 +435,13 @@ def transformer(cx, tok_bt, past=None, past_len=None):
     presents = []
     pasts = past if past is not None else [None] * cx.n_layer
     for layer in range(cx.n_layer):
-        last_bts, present = block(cx.scope(f'h{layer:d}'), last_bts, pasts[layer])
+        name = f'h{layer:d}'
+        last_bts, present = jax.named_call(block, name='block_'+name)(cx.scope(name), last_bts, pasts[layer])
         presents.append(present)
     logits_btq = final_embed(cx, last_bts)
     return logits_btq, presents
 
+@jax.named_call
 def scan(f, init, xs, length=None):
   if xs is None:
     xs = [None] * length
@@ -439,6 +453,7 @@ def scan(f, init, xs, length=None):
   return carry, jnp.stack(ys)
 
 
+@jax.named_call
 def padpasts(pasts, past_len):
   n = past_length(pasts)
   k = past_len - n
@@ -464,11 +479,13 @@ class TransformerV3:
     past_spec_i = [['(_, n, _, _)', '(_, n, _, _)'] for _ in range(self.cx.n_layer)]
     past_spec_o = [['(_, n + 1, _, _)', '(_, n + 1, _, _)'] for _ in range(self.cx.n_layer)]
     @partial(mask, in_shapes=['(1, 1)', past_spec_i, ''], out_shape=('(1, 1, _)', past_spec_o))
+    @jax.named_call
     def generate_once(next_token, decode_state, decode_len):
       next_logits, next_presents = self.model(self.cx, next_token, decode_state, decode_len)
       return next_logits, next_presents
     #self.generate_once_masked = jax.jit(generate_once)
     self.generate_once_masked = generate_once
+    @jax.named_call
     def generate_once_wrapped(next_token, decode_state, decode_len):
         pp(dict(name='_generate_once_wrapped', next_token=next_token, decode_state=decode_state, decode_len=decode_len))
         n = decode_len.item()
@@ -481,12 +498,14 @@ class TransformerV3:
     self.cx.allow_new = False
     print_variables(self.cx)
 
+  @jax.named_call
   def gen_once(self, next_token, decode_state, decode_len):
     output, new_state = self.generate_once_masked([next_token, decode_state, decode_len], dict(n=decode_len))
     clipped_state = jax.tree_util.tree_map(lambda x: x[:, 0:-1, :, :], new_state)
     return output, clipped_state
     
 
+  @jax.named_call
   def loss(self, XY_bt, past=None):
     X_bt = XY_bt[:, :-1]
     B, T = X_bt.shape
@@ -513,6 +532,7 @@ class TransformerV3:
     #loglosses_bt = - logprobs_btq.reshape((B*T, -1))[ np.arange(B*T), Y_bt.reshape((-1,))]
     #return loglosses_bt.mean()
 
+  @jax.named_call
   def generate_one_token(self, context, sample_key=None, past=None, **sampler_options):
     logprobs_btq, presents = self.model(self.cx, context, past)
     sampler_input = None
@@ -524,6 +544,7 @@ class TransformerV3:
     next_token, sample_info = sampler(sample_key, logits, sampler_input, **sampler_options)
     return next_token, new_key, presents
 
+  @jax.named_call
   def generate_tokens(self, tokenizer, prompt, length, sample_key=None, *, temp=0.8, **sampler_options):
     for i in range(length):
       context = np.array(tokenizer.encode(prompt))[None, :]
@@ -531,6 +552,7 @@ class TransformerV3:
       prompt += tokenizer.decode(token[0])
     return prompt
 
+  @jax.named_call
   def generate_tokens2(self, tokenizer, prompt, length, sample_key=None, *, temp=0.8, **sampler_options):
     context = np.array(tokenizer.encode(prompt))[None, :]
     past = None
@@ -543,10 +565,12 @@ class TransformerV3:
       prompt += tokenizer.decode(context[0])
     return prompt
 
+  @jax.named_call
   def eval_xmap(self, state, obs, target, ctx_length, past=None, *, use_tf=False):
     XY_bt = jnp.concatenate([obs, target[:, -1:]], axis=-1)
     return (self.tf_loss if use_tf else self.loss)(XY_bt, past)
 
+  @jax.named_call
   def eval(self, sample, use_tf=False):
     print("eval sample", sample["obs"].shape)
     print("eval target", sample["target"].shape)
@@ -565,6 +589,7 @@ class TransformerV3:
     print(f"eval done in {time.time() - start:.06}s")
     return out
 
+  @jax.named_call
   def generate_initial(self, context, ctx_length, key, gen_length=1):
     count = ctx_length[-1]
     assert (ctx_length == count).all()
@@ -578,18 +603,22 @@ class TransformerV3:
     initial_len = jnp.array(past_length(presents))
     return initial_logits, (initial_token, initial_presents, initial_len, key)
 
+  @jax.named_call
   def generate_once(self, next_token, decode_state, decode_len):
     next_logits, next_presents = self.model(self.cx, next_token, decode_state, decode_len)
     return next_logits, next_presents
 
+  @jax.named_call
   def generate_xmap(self, state, key, ctx, ctx_length, aux, sampler_options):
     sampler = self.config["sampler"]
     gen_length = self.gen_length
 
     if not hasattr(self, 'generate_sample'):
       @partial(jax.jit, static_argnames=['gen_length'])
+      @jax.named_call
       def generate_sample(initial_state, gen_length, sampler_options):
 
+        @jax.named_call
         def generate_scan_fn(carry, sampler_input):
           next_token, decode_state, decode_len, sample_key = carry
           sample_key, new_key = jax.random.split(sample_key)
@@ -612,6 +641,7 @@ class TransformerV3:
     result = self.generate_sample(initial_state, gen_length, sampler_options)
     return result
 
+  @jax.named_call
   def generate(self, ctx, ctx_length, gen_length, sampler_options, seed=None):
     if seed is None:
       seed = random.randint(0, 2 ** 60)
@@ -630,6 +660,7 @@ class TransformerV3:
   
 
 # takes in a logit distribution, softmax and then sample
+@jax.named_call
 def softmax_sample(key, logits, _, temp=1):
     return jax.random.categorical(key, logits/temp, -1).astype(jnp.uint32), None
 
