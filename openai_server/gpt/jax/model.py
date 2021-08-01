@@ -24,6 +24,7 @@ gState = {}
 
 if jax.default_backend() == 'tpu' and bool(int(os.environ.get('BF16', '1'))):
   default_dtype = jnp.bfloat16
+  print('Using bfloat16')
 else:
   default_dtype = jnp.float32
 
