@@ -893,10 +893,10 @@ if __name__ == '__main__':
 
     for i in range(3):
       # prompt = input("Type input:")
-      prompt = "Hello, my name is"
+      prompt = os.environ.get('PROMPT', "Hello, my name is")
       tokens = tokenizer.encode(prompt)
 
-      completion = sample(prompt, 128, seed=i+1)
+      completion = sample(prompt, int(os.environ.get('MAX_TOKENS', '128')), seed=i+1)
       print(repr(completion))
 
     if True:
