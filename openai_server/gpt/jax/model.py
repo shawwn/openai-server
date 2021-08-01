@@ -38,7 +38,7 @@ def nextbucket(x, size):
 def load_tensor(reader, name: str, dtype=None) -> np.array:
   #name = '.'.join(name.split('/')[1:])
   value = reader.get_tensor(name)
-  value = jnp.array(value, dtype=dtype or default_dtype)
+  value = jnp.array(np.squeeze(value), dtype=dtype or default_dtype)
   #key = '.'.join(name.split('/'))
   key = pathutil.normpath('///' + name)
   # if value.shape and value.shape[0] == 1:
