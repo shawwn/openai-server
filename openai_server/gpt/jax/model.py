@@ -32,6 +32,9 @@ def nextpow2(x):
     """Returns the next power of 2 greater than or equal to `x`"""
     return 1 if x == 0 else 2**math.ceil(math.log2(x))
 
+def nextbucket(x, size):
+  return (x + (size - 1)) // size * size
+
 def load_tensor(reader, name: str, dtype=None) -> np.array:
   #name = '.'.join(name.split('/')[1:])
   value = reader.get_tensor(name)
@@ -605,7 +608,7 @@ class TransformerV3:
     initial_token = context[..., -1:]
     logits, presents = self.model(self.cx, initial_context)
     initial_logits = logits[..., -1, :]
-    initial_padding = nextpow2(gen_length)
+    initial_padding = nextbucket(gen_length, self.config.get('bucket_size', 16))
     pp(dict(_name='generate_initial', count=count, initial_padding=initial_padding, gen_length=gen_length, key=key))
     initial_presents = padpasts(presents, initial_padding)
     initial_len = jnp.array(past_length(presents))
@@ -862,6 +865,7 @@ if __name__ == '__main__':
       # 'sampler': sampling.nucleaus_sample,
       'sampler': softmax_sample,
       'per_replica_batch': 1,
+      'bucket_size': int(os.environ.get('BUCKET_SIZE', '16')),
       }
 
   if bool(int(os.environ.get('TPU_CACHE', '0'))):
