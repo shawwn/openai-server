@@ -459,7 +459,7 @@ class TransformerV3:
     self.cx = create_root_context(params, prefix=prefix, **self.hparams)
 
     self.model = transformer
-    self.model_jit = jax.jit(self.model)
+    # self.model_jit = jax.jit(self.model)
 
     past_spec_i = [['(_, n, _, _)', '(_, n, _, _)'] for _ in range(self.cx.n_layer)]
     past_spec_o = [['(_, n + 1, _, _)', '(_, n + 1, _, _)'] for _ in range(self.cx.n_layer)]
