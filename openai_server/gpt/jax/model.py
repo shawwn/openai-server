@@ -19,6 +19,7 @@ import time
 import random
 import math
 import re
+import posixpath
 
 gState = {}
 
@@ -40,7 +41,7 @@ def load_tensor(reader, name: str, dtype=None) -> np.array:
   value = reader.get_tensor(name)
   value = jnp.array(np.squeeze(value), dtype=dtype or default_dtype)
   #key = '.'.join(name.split('/'))
-  key = pathutil.normpath('///' + name)
+  key = posixpath.normpath('///' + name)
   # if value.shape and value.shape[0] == 1:
   #   value = np.squeeze(value, axis=0)
   return key, value
@@ -72,150 +73,6 @@ def load(config):
   state_dict = load_state(name)
   pp({k: v.shape for k, v in state_dict.items()})
   return TransformerV3(config, state_dict)
-
-# Normalize the case of a pathname.  Trivial in Posix, string.lower on Mac.
-# On MS-DOS this may also turn slashes into backslashes; however, other
-# normalizations (such as optimizing '../' away) are not allowed
-# (another function should be defined to do that).
-
-def normcase(s):
-    """Normalize case of pathname.  Has no effect under Posix"""
-    return os.fspath(s)
-
-
-import genericpath
-
-
-class pathutil:
-    def _get_sep(path):
-        if isinstance(path, bytes):
-            return b'/'
-        else:
-            return '/'
-
-    # Return whether a path is absolute.
-    # Trivial in Posix, harder on the Mac or MS-DOS.
-
-    @classmethod
-    def isabs(cls, s):
-        """Test whether a path is absolute"""
-        s = os.fspath(s)
-        sep = cls._get_sep(s)
-        return s.startswith(sep)
-
-
-    # Join pathnames.
-    # Ignore the previous parts if a part is absolute.
-    # Insert a '/' unless the first part is empty or already ends in '/'.
-
-    @classmethod
-    def join(cls, a, *p):
-        """Join two or more pathname components, inserting '/' as needed.
-        If any component is an absolute path, all previous path components
-        will be discarded.  An empty last part will result in a path that
-        ends with a separator."""
-        a = os.fspath(a)
-        sep = cls._get_sep(a)
-        path = a
-        try:
-            if not p:
-                path[:0] + sep  #23780: Ensure compatible data type even if p is null.
-            for b in map(os.fspath, p):
-                if b.startswith(sep):
-                    path = b
-                elif not path or path.endswith(sep):
-                    path += b
-                else:
-                    path += sep + b
-        except (TypeError, AttributeError, BytesWarning):
-            genericpath._check_arg_types('join', a, *p)
-            raise
-        return path
-
-
-    # Split a path in head (everything up to the last '/') and tail (the
-    # rest).  If the path ends in '/', tail will be empty.  If there is no
-    # '/' in the path, head  will be empty.
-    # Trailing '/'es are stripped from head unless it is the root.
-
-    @classmethod
-    def split(cls, p):
-        """Split a pathname.  Returns tuple "(head, tail)" where "tail" is
-        everything after the final slash.  Either part may be empty."""
-        p = os.fspath(p)
-        sep = cls._get_sep(p)
-        i = p.rfind(sep) + 1
-        head, tail = p[:i], p[i:]
-        if head and head != sep*len(head):
-            head = head.rstrip(sep)
-        return head, tail
-
-    # Normalize a path, e.g. A//B, A/./B and A/foo/../B all become A/B.
-    # It should be understood that this may change the meaning of the path
-    # if it contains symbolic links!
-
-    def normpath(path):
-        """Normalize path, eliminating double slashes, etc."""
-        path = os.fspath(path)
-        if isinstance(path, bytes):
-            sep = b'/'
-            empty = b''
-            dot = b'.'
-            dotdot = b'..'
-        else:
-            sep = '/'
-            empty = ''
-            dot = '.'
-            dotdot = '..'
-        if path == empty:
-            return dot
-        initial_slashes = path.startswith(sep)
-        # POSIX allows one or two initial slashes, but treats three or more
-        # as single slash.
-        if (initial_slashes and
-            path.startswith(sep*2) and not path.startswith(sep*3)):
-            initial_slashes = 2
-        comps = path.split(sep)
-        new_comps = []
-        for comp in comps:
-            if comp in (empty, dot):
-                continue
-            if (comp != dotdot or (not initial_slashes and not new_comps) or
-                 (new_comps and new_comps[-1] == dotdot)):
-                new_comps.append(comp)
-            elif new_comps:
-                new_comps.pop()
-        comps = new_comps
-        path = sep.join(comps)
-        if initial_slashes:
-            path = sep*initial_slashes + path
-        return path or dot
-
-
-    # Return the tail (basename) part of a path, same as split(path)[1].
-
-    @classmethod
-    def basename(cls, p):
-        """Returns the final component of a pathname"""
-        p = os.fspath(p)
-        sep = cls._get_sep(p)
-        i = p.rfind(sep) + 1
-        return p[i:]
-
-
-    # Return the head (dirname) part of a path, same as split(path)[0].
-
-    @classmethod
-    def dirname(cls, p):
-        """Returns the directory component of a pathname"""
-        p = os.fspath(p)
-        sep = cls._get_sep(p)
-        i = p.rfind(sep) + 1
-        head = p[:i]
-        if head and head != sep*len(head):
-            head = head.rstrip(sep)
-        return head
-
 
 
 # ================================================================
@@ -276,7 +133,7 @@ class VariableContext(object):
         return self.name2val[name]
 
     def _join(self, *xs):
-        return pathutil.normpath(pathutil.join(*xs))
+        return posixpath.normpath(posixpath.join(*xs))
 
     def variables_list(self):
         return list(self.name2val.values())
