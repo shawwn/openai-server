@@ -799,7 +799,7 @@ if __name__ == '__main__':
       completion = sample(prompt, int(os.environ.get('MAX_TOKENS', '128')), seed=i+1)
       print(repr(completion))
 
-    if True:
+    if bool(int(os.environ.get('DEBUG', '0'))):
       breakpoint()
       print('')
 
