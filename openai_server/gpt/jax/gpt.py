@@ -46,7 +46,7 @@ def load_layers(name: str, dtype=None):
       idx = int(idx)
       buckets[postfix][idx] = state.pop(k)
   blocks = {k: jnp.array(jnp.stack(buckets.pop(k)), dtype=dtype) for k in list(buckets.keys())}
-  state = {k: jnp.array(v, dtype=dtype) for k, v in state}
+  state = {k: jnp.array(v, dtype=dtype) for k, v in state.items()}
   state['/model/transformer'] = blocks
   return state
 
