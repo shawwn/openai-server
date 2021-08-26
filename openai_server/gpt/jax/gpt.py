@@ -234,11 +234,14 @@ def final_embed(cx, last_bts):
 @jax.named_call
 def transformer_embed(cx, last_bts, past=None):
   def apply_scan_fn(x, layer_state):
-    x, past = x
+    x, = x
+    past = layer_state.pop('past')
     cx2 = VariableContext(layer_state, prefix='', **cx.static_kwargs)
     x, present = block(cx2, x, past)
-    return [x, past], present
-  [last_bts, past], presents = jax.lax.scan(apply_scan_fn, [last_bts, past], xs=cx['transformer'])
+    return [x], present
+  xs = {**cx['transformer']}
+  xs['past'] = past
+  [last_bts,], presents = jax.lax.scan(apply_scan_fn, [last_bts], xs=xs)
   return last_bts, presents
 
 @jax.named_call
@@ -254,7 +257,7 @@ def past_length(past):
   if past is None:
     return 0
   elif isinstance(past, (list, tuple)):
-    K_bthr, V_bthr = past[0]
+    K_bthr, V_bthr = past
     return V_bthr.shape[-3]
   else:
     KV_bthr = past
@@ -269,10 +272,13 @@ if __name__ == '__main__':
   hparams = json.loads(open(f'models/{model_name}/hparams.json').read())
   pp(shape_map(state))
   cx = VariableContext(state, prefix='/model/', allow_new=False, **hparams)
-  toks = jnp.zeros((1, cx.n_ctx), dtype='i')
+  #toks = jnp.zeros((1, cx.n_ctx), dtype='i')
+  toks = jnp.zeros((1, 16), dtype='i')
   # last_bts = initial_embed(cx, toks)
   # curr_bts, presents = transformer_embed(cx, last_bts)
   # logits_btq = final_embed(cx, curr_bts)
   network = jax.jit(transformer)
   logits_btq, presents = network(cx, toks)
+  logits_btq2, presents2 = network(cx, toks[:, 0:1], presents)
+  logits_btq3, presents3 = network(cx, toks[:, 0:1], presents2)
 
