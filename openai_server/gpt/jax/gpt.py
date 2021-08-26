@@ -31,7 +31,7 @@ def load_state(name: str):
   return state_dict
 
 
-def load_layers(name: str):
+def load_layers(name: str, dtype=None):
   state = load_state(name)
   n_blocks = 0
   for k in state.keys():
@@ -45,7 +45,7 @@ def load_layers(name: str):
       idx, postfix = k.split('/h', 1)[1].split('/', 1)
       idx = int(idx)
       buckets[postfix][idx] = state.pop(k)
-  blocks = {k: jnp.stack(buckets.pop(k)) for k in list(buckets.keys())}
+  blocks = {k: jnp.array(jnp.stack(buckets.pop(k)), dtype=dtype) for k in list(buckets.keys())}
   state['/model/transformer'] = blocks
   return state
 
@@ -293,9 +293,9 @@ if __name__ == '__main__':
   tokenizer = encoder.get_encoder(model_name)
   def encode(prompt):
     return jnp.array(tokenizer.encode(prompt), dtype='i')[None, ...]
-  state = load_layers(model_name)
+  state = load_layers(model_name, dtype=default_dtype)
   hparams = json.loads(open(f'models/{model_name}/hparams.json').read())
-  pp(shape_map(state))
+  pp(jax.tree_util.tree_map(lambda x: (x.shape, x.dtype), state))
   cx = VariableContext(state, prefix='/model/', allow_new=False, **hparams)
   #tokens = jnp.zeros((1, cx.n_ctx), dtype='i')
   #tokens = jnp.ones((1, 1), dtype='i') * 50256
