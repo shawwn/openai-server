@@ -3,6 +3,7 @@ import os
 import posixpath
 import collections
 import json
+import random
 
 import jax
 import jax.numpy as jnp
@@ -245,6 +246,7 @@ def transformer_embed(cx, last_bts, past=None):
   return last_bts, presents
 
 @jax.named_call
+@jax.jit
 def transformer(cx, tok_bt, past=None, past_len=None):
     if past_len is None:
       past_len = past_length(past)
@@ -264,21 +266,51 @@ def past_length(past):
     return KV_bthr.shape[-3]
 
 
+# takes in a logit distribution, softmax and then sample
+@jax.named_call
+def softmax_sample(key, logits, temp=0.75):
+    return jax.random.categorical(key, logits / temp, -1).astype(jnp.uint32)
+
+
+@jax.named_call
+def generate_token(logprobs_btq, sample_key=None, *, sampler, **sampler_options):
+  if sample_key is None:
+    sample_key = jax.random.PRNGKey(random.randint(0, 2 ** 60))
+  sample_key, new_key = jax.random.split(sample_key)
+  logits = logprobs_btq[..., -1:, :]
+  next_token = sampler(sample_key, logits, **sampler_options)
+  return next_token, new_key
+
+
+
 if __name__ == '__main__':
   from pprint import pprint as pp
   np.random.seed(0)
   model_name = os.environ.get('MODEL_NAME', '117M')
+  max_tokens = int(os.environ.get('MAX_TOKENS', '16'))
+  prompt = os.environ.get('PROMPT', 'Hello, my name is')
+  from src import encoder
+  tokenizer = encoder.get_encoder(model_name)
+  def encode(prompt):
+    return jnp.array(tokenizer.encode(prompt), dtype='i')[None, ...]
   state = load_layers(model_name)
   hparams = json.loads(open(f'models/{model_name}/hparams.json').read())
   pp(shape_map(state))
   cx = VariableContext(state, prefix='/model/', allow_new=False, **hparams)
-  #toks = jnp.zeros((1, cx.n_ctx), dtype='i')
-  toks = jnp.zeros((1, 16), dtype='i')
-  # last_bts = initial_embed(cx, toks)
-  # curr_bts, presents = transformer_embed(cx, last_bts)
-  # logits_btq = final_embed(cx, curr_bts)
-  network = jax.jit(transformer)
-  logits_btq, presents = network(cx, toks)
-  logits_btq2, presents2 = network(cx, toks[:, 0:1], presents)
-  logits_btq3, presents3 = network(cx, toks[:, 0:1], presents2)
+  #tokens = jnp.zeros((1, cx.n_ctx), dtype='i')
+  #tokens = jnp.ones((1, 1), dtype='i') * 50256
+  tokens = encode(prompt)
+  network = transformer
+  sample_key = None
+  presents = None
+  sampler = softmax_sample
+  from jax.util import partial
+  gen_token = jax.jit(partial(generate_token, sampler=softmax_sample))
+  print('')
+  print(prompt, end='', flush=True)
+  logits_btq, presents = network(cx, encode(prompt))
+  for i in range(max_tokens):
+    token, sample_key = gen_token(logits_btq, sample_key)
+    print(tokenizer.decode(token[0]), end='', flush=True)
+    logits_btq, presents = network(cx, token, presents)
 
