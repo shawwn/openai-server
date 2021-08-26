@@ -152,57 +152,57 @@ def attention_mask(nd, ns, *, dtype):
 
 @jax.named_call
 def mask_attn_weights(w):
-    *_, nd, ns = w.shape
+    *nb, nd, ns = w.shape
     if nd <= 1:
       return w
     b = attention_mask(nd, ns, dtype=w.dtype)
-    b = jnp.reshape(b, (1, 1, nd, ns))
+    b = jnp.reshape(b, tuple([1 for _ in range(len(nb))]) + (nd, ns))
     w = w * b - jnp.array(1e9, dtype=w.dtype) * (1 - b)
     return w
 
 @jax.named_call
-def _dense(X_btk, W_kf, b_f, F):
-    B, T, K = X_btk.shape
-    X_bt_k = jnp.reshape(X_btk, (-1, K))
-    Y_bt_f = jnp.matmul(X_bt_k, W_kf) + b_f
-    return jnp.reshape(Y_bt_f, (B, T, F))
+def _dense(X_tk, W_kf, b_f, F):
+    *B, T, K = X_tk.shape
+    X_t_k = jnp.reshape(X_tk, (-1, K))
+    Y_t_f = jnp.matmul(X_t_k, W_kf) + b_f
+    return jnp.reshape(Y_t_f, (*B, T, F))
 
 @jax.named_call
-def dense(cx, X_btk, F):
-    B, T, K = X_btk.shape
+def dense(cx, X_tk, F):
+    *B, T, K = X_tk.shape
     W_kf = cx.get_variable("w", initializer=lambda: normc(K, F))
     b_f = cx.get_variable("b", initializer=lambda: np.zeros(F,'f'))
-    return _dense(X_btk, W_kf, b_f, F)
+    return _dense(X_tk, W_kf, b_f, F)
 
 @jax.named_call
-def attn(cx, X_btk, past):
+def attn(cx, X_tk, past):
     n_head = cx.n_head
-    B, T, n_state = X_btk.shape
+    *B, T, n_state = X_tk.shape
     assert n_state % n_head==0
-    QKV_b_t_3s = dense(cx.scope('c_attn'), X_btk, n_state * 3)
-    QKV_b_t_3h_r = jnp.reshape(QKV_b_t_3s, (B, T, 3 * n_head, n_state // n_head))
-    Q_bthr, K_bthr, V_bthr = jnp.split(QKV_b_t_3h_r, 3, axis=-2)
+    QKV_t_3s = dense(cx.scope('c_attn'), X_tk, n_state * 3)
+    QKV_t_3h_r = jnp.reshape(QKV_t_3s, (*B, T, 3 * n_head, n_state // n_head))
+    Q_thr, K_thr, V_thr = jnp.split(QKV_t_3h_r, 3, axis=-2)
     if past is not None:
         pk, pv = past
-        K_bthr = jnp.concatenate([pk, K_bthr], axis=-3)
-        V_bthr = jnp.concatenate([pv, V_bthr], axis=-3)
-    present = [K_bthr, V_bthr]
-    R = Q_bthr.shape[-1]
-    W_bhtt = jnp.einsum("bthr,bThr->bhtT", Q_bthr, K_bthr) / jnp.sqrt(R).astype(default_dtype)
-    W_bhtt = mask_attn_weights(W_bhtt)
-    W_bhtt = stax.softmax(W_bhtt, axis=-1)
-    A_bthr = jnp.einsum("bhtT,bThr->bthr", W_bhtt, V_bthr)
-    A_bts = jnp.reshape(A_bthr, (B, T, n_state))
-    P_bts = dense(cx.scope('c_proj'), A_bts, n_state)
-    return P_bts, present
+        K_thr = jnp.concatenate([pk, K_thr], axis=-3)
+        V_thr = jnp.concatenate([pv, V_thr], axis=-3)
+    present = [K_thr, V_thr]
+    R = Q_thr.shape[-1]
+    W_htt = jnp.einsum("thr,Thr->htT", Q_thr, K_thr) / jnp.sqrt(R).astype(default_dtype)
+    W_htt = mask_attn_weights(W_htt)
+    W_htt = stax.softmax(W_htt, axis=-1)
+    A_thr = jnp.einsum("htT,Thr->thr", W_htt, V_thr)
+    A_ts = jnp.reshape(A_thr, (*B, T, n_state))
+    P_ts = dense(cx.scope('c_proj'), A_ts, n_state)
+    return P_ts, present
 
 @jax.named_call
-def mlp(cx, X_bts):
-    S = X_bts.shape[-1]
+def mlp(cx, X_ts):
+    S = X_ts.shape[-1]
     n_hid = S * 4
-    H_bth = gelu(dense(cx.scope('c_fc'), X_bts, n_hid))
-    Y_bts = dense(cx.scope('c_proj'), H_bth, S)
-    return Y_bts
+    H_th = gelu(dense(cx.scope('c_fc'), X_ts, n_hid))
+    Y_ts = dense(cx.scope('c_proj'), H_th, S)
+    return Y_ts
 
 @jax.named_call
 def block(cx, x, past):
@@ -213,28 +213,25 @@ def block(cx, x, past):
     return x, present
 
 @jax.named_call
-def initial_embed(cx, tok_bt, past_len=0):
-    B, T = tok_bt.shape
-    pos_bt = jax.lax.broadcasted_iota(jnp.int32, (B, T), 1)
-    pos_bt = pos_bt + past_len
+def initial_embed(cx, tok_t, past_len=0):
+    pos_t = jax.lax.broadcasted_iota(jnp.int32, tok_t.shape, len(tok_t.shape)-1)
+    pos_t = pos_t + past_len
     tokembs_qe = cx.get_variable('wte', initializer=lambda: normc(cx.n_vocab, cx.n_embd) * 0.1)
     posembs_pe = cx.get_variable('wpe', initializer=lambda: normc(cx.n_ctx, cx.n_embd) * 0.1)
-    tokemb_bte = tokembs_qe[tuple([tok_bt])]
-    posemb_bte = posembs_pe[tuple([pos_bt])]
-    last_bts = tokemb_bte + posemb_bte
-    if len(last_bts.shape) < 3:
-        last_bts = last_bts[jnp.newaxis, ...]
-    return last_bts
+    tokemb_te = tokembs_qe[tuple([tok_t])]
+    posemb_te = posembs_pe[tuple([pos_t])]
+    last_ts = tokemb_te + posemb_te
+    return last_ts
 
 @jax.named_call
-def final_embed(cx, last_bts):
+def final_embed(cx, last_ts):
     tokembs_qe = cx.get_variable('wte')
-    last_bts = norm(cx.scope('ln_f'), last_bts)
-    logits_btq = jnp.matmul(last_bts, tokembs_qe.T)
-    return logits_btq
+    last_ts = norm(cx.scope('ln_f'), last_ts)
+    logits_tq = jnp.matmul(last_ts, tokembs_qe.T)
+    return logits_tq
 
 @jax.named_call
-def transformer_embed(cx, last_bts, past=None):
+def transformer_embed(cx, last_ts, past=None):
   def apply_scan_fn(x, layer_state):
     x, = x
     past = layer_state.pop('past')
@@ -243,18 +240,18 @@ def transformer_embed(cx, last_bts, past=None):
     return [x], present
   xs = {**cx['transformer']}
   xs['past'] = past
-  [last_bts,], presents = jax.lax.scan(apply_scan_fn, [last_bts], xs=xs)
-  return last_bts, presents
+  [last_ts,], presents = jax.lax.scan(apply_scan_fn, [last_ts], xs=xs)
+  return last_ts, presents
 
 @jax.named_call
 @jax.jit
-def transformer(cx, tok_bt, past=None, past_len=None):
+def transformer(cx, tok_t, past=None, past_len=None):
     if past_len is None:
       past_len = past_length(past)
-    last_bts = initial_embed(cx, tok_bt, past_len)
-    last_bts, presents = transformer_embed(cx, last_bts, past=past)
-    logits_btq = final_embed(cx, last_bts)
-    return logits_btq, presents
+    last_ts = initial_embed(cx, tok_t, past_len)
+    last_ts, presents = transformer_embed(cx, last_ts, past=past)
+    logits_tq = final_embed(cx, last_ts)
+    return logits_tq, presents
 
 def past_length(past):
   if past is None:
@@ -293,7 +290,7 @@ if __name__ == '__main__':
   from src import encoder
   tokenizer = encoder.get_encoder(model_name)
   def encode(prompt):
-    return jnp.array(tokenizer.encode(prompt), dtype='i')[None, ...]
+    return jnp.array(tokenizer.encode(prompt), dtype='i')
   state = load_layers(model_name, dtype=default_dtype)
   hparams = json.loads(open(f'models/{model_name}/hparams.json').read())
   pp(jax.tree_util.tree_map(lambda x: (x.shape, x.dtype), state))
@@ -302,6 +299,9 @@ if __name__ == '__main__':
   #tokens = jnp.ones((1, 1), dtype='i') * 50256
   tokens = encode(prompt)
   network = transformer
+  # logits_tq = initial_embed(cx, tokens)
+  # logits_tq, presents = transformer_embed(cx, logits_tq)
+  # logits_tq = final_embed(cx, logits_tq)
   sample_key = None
   presents = None
   sampler = softmax_sample
@@ -312,6 +312,6 @@ if __name__ == '__main__':
   logits_btq, presents = network(cx, encode(prompt))
   for i in range(max_tokens):
     token, sample_key = gen_token(logits_btq, sample_key)
-    print(tokenizer.decode(token[0]), end='', flush=True)
+    print(tokenizer.decode(token), end='', flush=True)
     logits_btq, presents = network(cx, token, presents)
 
