@@ -314,4 +314,5 @@ if __name__ == '__main__':
     token, sample_key = gen_token(logits_tq, sample_key)
     print(tokenizer.decode(token), end='', flush=True)
     logits_tq, presents = network(cx, token, presents)
+  print('')
 
