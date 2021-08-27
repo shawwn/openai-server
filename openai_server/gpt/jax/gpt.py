@@ -271,11 +271,11 @@ def softmax_sample(key, logits, temp=0.75):
 
 
 @jax.named_call
-def generate_token(logprobs_btq, sample_key=None, *, sampler, **sampler_options):
+def generate_token(logprobs_tq, sample_key=None, *, sampler, **sampler_options):
   if sample_key is None:
     sample_key = jax.random.PRNGKey(random.randint(0, 2 ** 60))
   sample_key, new_key = jax.random.split(sample_key)
-  logits = logprobs_btq[..., -1:, :]
+  logits = logprobs_tq[..., -1:, :]
   next_token = sampler(sample_key, logits, **sampler_options)
   return next_token, new_key
 
@@ -309,9 +309,9 @@ if __name__ == '__main__':
   gen_token = jax.jit(partial(generate_token, sampler=softmax_sample))
   print('')
   print(prompt, end='', flush=True)
-  logits_btq, presents = network(cx, encode(prompt))
+  logits_tq, presents = network(cx, encode(prompt))
   for i in range(max_tokens):
-    token, sample_key = gen_token(logits_btq, sample_key)
+    token, sample_key = gen_token(logits_tq, sample_key)
     print(tokenizer.decode(token), end='', flush=True)
-    logits_btq, presents = network(cx, token, presents)
+    logits_tq, presents = network(cx, token, presents)
 
