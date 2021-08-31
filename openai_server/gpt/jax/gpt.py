@@ -2,7 +2,6 @@ import numpy as np
 import os
 import posixpath
 import collections
-import json
 import random
 
 import jax
@@ -279,6 +278,11 @@ def generate_token(logprobs_tq, sample_key=None, *, sampler, **sampler_options):
   next_token = sampler(sample_key, logits, **sampler_options)
   return next_token, new_key
 
+def download_model(model_name):
+  from shlex import quote
+  cmd = 'python3 download_model.py ' + quote(model_name)
+  print(cmd)
+  os.system(cmd)
 
 
 if __name__ == '__main__':
@@ -289,12 +293,21 @@ if __name__ == '__main__':
   model_name = os.environ.get('MODEL_NAME', '117M')
   max_tokens = int(os.environ.get('MAX_TOKENS', '16'))
   prompt = os.environ.get('PROMPT', 'Hello, my name is')
-  from src import encoder
-  tokenizer = encoder.get_encoder(model_name)
+  while "ensure that the model loads properly, otherwise redownload it":
+    from src import encoder
+    import json
+    from tensorflow.python.framework import errors_impl as tf_error
+    try:
+      tokenizer = encoder.get_encoder(model_name)
+      state = load_layers(model_name, dtype=default_dtype)
+      hparams = json.loads(open(f'models/{model_name}/hparams.json').read())
+      break
+    except (IOError, IndexError, tf_error.OpError, json.decoder.JSONDecodeError):
+      # (TF raises IndexError if a checkpoint is corrupt.)
+      download_model(model_name)
+      import time; time.sleep(1.0) # so that you can Ctrl-C the download
   def encode(prompt):
     return jnp.array(tokenizer.encode(prompt), dtype='i')
-  state = load_layers(model_name, dtype=default_dtype)
-  hparams = json.loads(open(f'models/{model_name}/hparams.json').read())
   pp(jax.tree_util.tree_map(lambda x: (x.shape, x.dtype), state))
   cx = VariableContext(state, prefix='/model/', allow_new=False, **hparams)
   #tokens = jnp.zeros((1, cx.n_ctx), dtype='i')
