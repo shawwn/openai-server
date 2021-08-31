@@ -282,6 +282,8 @@ def generate_token(logprobs_tq, sample_key=None, *, sampler, **sampler_options):
 
 
 if __name__ == '__main__':
+  import sys
+  sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
   from pprint import pprint as pp
   np.random.seed(0)
   model_name = os.environ.get('MODEL_NAME', '117M')
