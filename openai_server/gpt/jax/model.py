@@ -707,6 +707,11 @@ def _einsum_contract_path(*operands, **kwargs):
 lax_numpy._polymorphic_einsum_contract_path_handlers[Poly] = _einsum_contract_path
 
 
+def download_model(model_name):
+  from shlex import quote
+  cmd = 'python3 download_model.py ' + quote(model_name)
+  print(cmd)
+  os.system(cmd)
 
 if __name__ == '__main__':
   np.random.seed(0)
@@ -733,16 +738,22 @@ if __name__ == '__main__':
     except AttributeError:
       print('Failed to initialize the compilation cache')
 
-  tokenizer = encoder.get_encoder(config['model_name'])
-
   cores_per_replica = config['cores_per_replica']
   mesh_shape = (jax.device_count() // cores_per_replica, cores_per_replica)
   devices = np.array(jax.devices()).reshape(mesh_shape)
   maps.thread_resources.env = maps.ResourceEnv(maps.Mesh(devices, ('dp', 'mp')), ())
 
   with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
-    network = load(config)
-
+    while "ensure that the model loads properly, otherwise redownload it":
+      from tensorflow.python.framework import errors_impl as tf_error
+      try:
+        tokenizer = encoder.get_encoder(config['model_name'])
+        network = load(config)
+        break
+      except (IOError, IndexError, tf_error.OpError, json.decoder.JSONDecodeError):
+        # (TF raises IndexError if a checkpoint is corrupt.)
+        download_model(config['model_name'])
+        import time; time.sleep(1.0) # so that you can Ctrl-C the download
     # xs, tree = tree_util.tree_flatten(network.cx)
     # actual = tree_util.tree_unflatten(tree, xs)
 
