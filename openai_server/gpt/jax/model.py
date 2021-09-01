@@ -8,6 +8,9 @@ import numpy as np
 import os
 from pprint import pprint as pp
 
+import sys
+sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
+
 from src import model as tf_model
 from src import encoder
 
