@@ -730,7 +730,7 @@ if __name__ == '__main__':
       'bucket_size': int(os.environ.get('BUCKET_SIZE', '16')),
       }
 
-  if bool(int(os.environ.get('TPU_CACHE', '0'))):
+  if bool(int(os.environ.get('TPU_CACHE', '1'))):
     try:
       from jax.experimental.compilation_cache import compilation_cache as cc
       cc.initialize_cache('cache')
