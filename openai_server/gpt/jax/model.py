@@ -4,7 +4,6 @@ from jax.experimental import PartitionSpec as P
 from jax.experimental.pjit import pjit, pjit_p, with_sharding_constraint
 import jax.numpy as jnp
 from jax.experimental import maps, stax
-import haiku as hk
 import numpy as np
 import os
 from pprint import pprint as pp
@@ -505,22 +504,20 @@ class TransformerV3:
 
     # generate_fn = hk.transform(generate_sample).apply
     # return generate_fn(state["params"], key, ctx, ctx_length, aux)
-    _, initial_state = self.generate_initial(cx, ctx, ctx_length, key[0], gen_length)
+    _, initial_state = self.generate_initial(cx, ctx, ctx_length, key, gen_length)
     result = self.generate_sample(initial_state, gen_length, sampler_options)
     return result
 
   @jax.named_call
   def generate(self, ctx, ctx_length, gen_length, sampler_options, seed=None):
-    if seed is None:
-      seed = random.randint(0, 2 ** 60)
-    key = hk.PRNGSequence(seed)
-
+    seed = seed or random.randint(0, 2 ** 60)
+    key = jax.random.PRNGKey(seed)
     batch_size = ctx.shape[0]
     aux = jnp.zeros((batch_size, gen_length), dtype=jnp.uint32)
     self.gen_length = gen_length
 
     return self.generate_xmap(self.cx,
-                              jnp.array(key.take(batch_size)),
+                              key,
                               ctx,
                               jnp.array(ctx_length, dtype=jnp.uint32),
                               aux,
@@ -761,8 +758,8 @@ if __name__ == '__main__':
 
     def prepare_sample(prompt, seed=None, batch_size=1, temp=0.75, **sampler_options):
       sampler_options = jax.tree_util.tree_map(lambda x: np.ones(batch_size) * x, {'temp': temp, **sampler_options})
-      seed = seed or random.randint(0, 2**60)
-      key = jnp.array(hk.PRNGSequence(seed).take(batch_size))
+      seed = seed or random.randint(0, 2 ** 60)
+      key = jax.random.PRNGKey(seed)
       if isinstance(prompt, str):
         tokens = tokenizer.encode(prompt)
       else:
