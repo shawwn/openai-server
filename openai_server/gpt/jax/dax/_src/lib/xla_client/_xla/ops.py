@@ -44,8 +44,8 @@ def ConstantLiteral(builder: _XlaBuilder, value: _LiteralSlice) -> _XlaOp:
 Constant = ConstantLiteral
 
 def ConvertElementType(
-    operand: _XlaOp,
-    new_element_type: _PrimitiveType) -> _XlaOp:
+        operand: _XlaOp,
+        new_element_type: _PrimitiveType) -> _XlaOp:
   return _xops.ConvertElementType(_Op(operand), new_element_type)
 
 def GetDimensionSize(operand: _XlaOp, index: int) -> _XlaOp:
@@ -55,22 +55,22 @@ def GetTupleElement(tuple_data: _XlaOp, index: int) -> _XlaOp:
   return _xops.GetTupleElement(_Op(tuple_data), index)
 
 def Parameter(
-    builder: _XlaBuilder,
-    parameter_number: int,
-    shape: _Shape,
-    name: str = None,
-    replicated_at_leaf_buffers: Sequence[bool] = None) -> _XlaOp:
+        builder: _XlaBuilder,
+        parameter_number: int,
+        shape: _Shape,
+        name: str = None,
+        replicated_at_leaf_buffers: Sequence[bool] = None) -> _XlaOp:
   if name is None:
     name = ''
-  #return _xops.Parameter(builder, parameter_number, shape, name, replicated_at_leaf_buffers)
+  # return _xops.Parameter(builder, parameter_number, shape, name, replicated_at_leaf_buffers)
   return builder.Parameter(parameter_number, shape, name, replicated_at_leaf_buffers)
 
 def Reduce(
-    builder: _XlaBuilder,
-    operands: Sequence[_XlaOp],
-    init_values: Sequence[_XlaOp],
-    computation: _XlaComputation,
-    dimensions_to_reduce: Sequence[int]) -> _XlaOp:
+        builder: _XlaBuilder,
+        operands: Sequence[_XlaOp],
+        init_values: Sequence[_XlaOp],
+        computation: _XlaComputation,
+        dimensions_to_reduce: Sequence[int]) -> _XlaOp:
   return _xops.Reduce(builder, _Op(operands), _Op(init_values), computation, dimensions_to_reduce)
 
 def Tuple(builder: _XlaBuilder, elements: Sequence[_XlaOp]) -> _XlaOp:
