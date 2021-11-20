@@ -38,6 +38,12 @@ def AsShape(sh) -> _xc.Shape:
     return _xc.Shape.token_shape()
   assert hasattr(sh, 'layout')
   assert hasattr(sh, 'is_dynamic_dimension')
+  if len(sh.layout.minor_to_major) < len(sh.dimensions):
+    while len(sh.layout.minor_to_major) > 0:
+      sh.layout.minor_to_major.pop()
+    sh.layout.minor_to_major.extend(reversed(range(len(sh.dimensions))))
+  while len(sh.is_dynamic_dimension) < len(sh.dimensions):
+    sh.is_dynamic_dimension.append(False)
   return _xc.Shape.array_shape(
     _xla_types.PrimitiveTypeToDtype(sh.element_type),
     sh.dimensions,
