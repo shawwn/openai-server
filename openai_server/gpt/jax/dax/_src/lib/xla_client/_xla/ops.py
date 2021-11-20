@@ -26,7 +26,7 @@ def Broadcast(operand: _XlaOp, sizes: Sequence[int]) -> _XlaOp:
 def BroadcastInDim(operand: _XlaOp,
                    shape: Sequence[int],
                    broadcast_dimensions: Sequence[int]) -> _XlaOp:
-  return _xops.BroadcastIndim(_Op(operand), shape, broadcast_dimensions)
+  return _xops.BroadcastInDim(_Op(operand), shape, broadcast_dimensions)
 
 def Call(builder: _XlaBuilder,
          computation: _XlaComputation,
