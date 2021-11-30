@@ -24,7 +24,7 @@ def load_tensor(reader, name: str) -> np.array:
 
 
 def load_state(name: str):
-  from tensorflow.python.training import py_checkpoint_reader
+  from tensorflow_checkpoint_reader import py_checkpoint_reader
   reader = py_checkpoint_reader.NewCheckpointReader(f'models/{name}/model.ckpt')
   state_dict = dict([load_tensor(reader, k) for k in list(reader.get_variable_to_shape_map().keys())])
   return state_dict
@@ -296,13 +296,13 @@ if __name__ == '__main__':
   while "ensure that the model loads properly, otherwise redownload it":
     from src import encoder
     import json
-    from tensorflow.python.framework import errors_impl as tf_error
+    # from tensorflow.python.framework import errors_impl as tf_error
     try:
       tokenizer = encoder.get_encoder(model_name)
       state = load_layers(model_name, dtype=default_dtype)
       hparams = json.loads(open(f'models/{model_name}/hparams.json').read())
       break
-    except (IOError, IndexError, tf_error.OpError, json.decoder.JSONDecodeError):
+    except (IOError, IndexError, json.decoder.JSONDecodeError): # , tf_error.OpError
       # (TF raises IndexError if a checkpoint is corrupt.)
       download_model(model_name)
       import time; time.sleep(1.0) # so that you can Ctrl-C the download
@@ -320,14 +320,14 @@ if __name__ == '__main__':
   sample_key = None
   presents = None
   sampler = softmax_sample
-  from jax.util import partial
+  from jax._src.util import partial
   gen_token = jax.jit(partial(generate_token, sampler=softmax_sample))
   print('')
   print(prompt, end='', flush=True)
   logits_tq, presents = network(cx, encode(prompt))
   for i in range(max_tokens):
     token, sample_key = gen_token(logits_tq, sample_key)
-    print(tokenizer.decode(token), end='', flush=True)
+    print(tokenizer.decode(token.tolist()), end='', flush=True)
     logits_tq, presents = network(cx, token, presents)
   print('')
 

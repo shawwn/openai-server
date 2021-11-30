@@ -11,8 +11,16 @@ from pprint import pprint as pp
 import sys
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")))
 
-from src import model as tf_model
 from src import encoder
+
+try:
+  from src import model as tf_model
+  import tensorflow as tf2
+  import tensorflow.compat.v1 as tf
+except ImportError:
+  tf_model = None
+  tf2 = None
+  tf = None
 
 import json
 import functools
@@ -49,13 +57,10 @@ def load_tensor(reader, name: str, dtype=None) -> np.array:
   return key, value
 
 def load_state(name: str, dtype=None):
-  from tensorflow.python.training import py_checkpoint_reader
+  from tensorflow_checkpoint_reader import py_checkpoint_reader
   reader = py_checkpoint_reader.NewCheckpointReader( 'models/{name}/model.ckpt'.format(name=name) )
   state_dict = dict([load_tensor(reader, k, dtype=dtype) for k in list(reader.get_variable_to_shape_map().keys())])
   return state_dict
-
-import tensorflow as tf2
-import tensorflow.compat.v1 as tf
 
 _variables = {}
 
@@ -556,13 +561,13 @@ def foo(x):
 
 # https://jax.readthedocs.io/en/latest/jax.html#jax.jit
 
-@partial(pmap, axis_name='rows')
-@partial(pmap, axis_name='cols')
-def normalize(x):
-    row_normed = x / jax.lax.psum(x, 'rows')
-    col_normed = x / jax.lax.psum(x, 'cols')
-    doubly_normed = x / jax.lax.psum(x, ('rows', 'cols'))
-    return row_normed, col_normed, doubly_normed
+# @partial(pmap, axis_name='rows')
+# @partial(pmap, axis_name='cols')
+# def normalize(x):
+#     row_normed = x / jax.lax.psum(x, 'rows')
+#     col_normed = x / jax.lax.psum(x, 'cols')
+#     doubly_normed = x / jax.lax.psum(x, ('rows', 'cols'))
+#     return row_normed, col_normed, doubly_normed
 
 # >>> x = jnp.arange(8.).reshape((4, 2))
 # >>> row_normed, col_normed, doubly_normed = normalize(x)
@@ -716,7 +721,7 @@ def download_model(model_name):
 if __name__ == '__main__':
   np.random.seed(0)
   config = {
-      'model_name': os.environ.get('MODEL_NAME', '345M'),
+      'model_name': os.environ.get('MODEL_NAME', '117M'),
       'cores_per_replica': jax.device_count(), #1,
       # 'seq': 1024,
       # 'n_vocab': 50257,
@@ -745,12 +750,12 @@ if __name__ == '__main__':
 
   with jax.experimental.maps.mesh(devices, ('dp', 'mp')):
     while "ensure that the model loads properly, otherwise redownload it":
-      from tensorflow.python.framework import errors_impl as tf_error
+      # from tensorflow.python.framework import errors_impl as tf_error
       try:
         tokenizer = encoder.get_encoder(config['model_name'])
         network = load(config)
         break
-      except (IOError, IndexError, tf_error.OpError, json.decoder.JSONDecodeError):
+      except (IOError, IndexError, json.decoder.JSONDecodeError): # tf_error.OpError,
         # (TF raises IndexError if a checkpoint is corrupt.)
         download_model(config['model_name'])
         import time; time.sleep(1.0) # so that you can Ctrl-C the download
@@ -796,7 +801,7 @@ if __name__ == '__main__':
       output_ = np.squeeze(output)
       print(f"squeezed in {time.time() - start:06}s")
       start = time.time()
-      completion = tokenizer.decode(output_)
+      completion = tokenizer.decode(output_.tolist())
       print(f"decoded in {time.time() - start:06}s")
       if echo:
         completion = prompt + completion
@@ -807,7 +812,7 @@ if __name__ == '__main__':
       prompt = os.environ.get('PROMPT', "Hello, my name is")
       tokens = tokenizer.encode(prompt)
 
-      completion = sample(prompt, int(os.environ.get('MAX_TOKENS', '128')), seed=i+1)
+      completion = sample(prompt, int(os.environ.get('MAX_TOKENS', '32')), seed=i+1)
       print(repr(completion))
 
     if bool(int(os.environ.get('DEBUG', '0'))):
